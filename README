@@ -1,1 +1,21 @@
-TODO: FIll this in
+Blind Estimation of Reverberation Time
+
+PREREQUISITES
+This program required that the libsndfile libraries be installed on the system 
+running the program.
+
+RUNNING THE PROGRAM
+This program has been tested on Debian systems. This will be extended to Windows
+platforms in the future, once I actually get it working. This readme is really
+just so that I remember what how to run it.
+ 
+To run the program, execute the following:
+gcc -o rt main.c -I /usr/include -L/usr/lib/x86_64-linux-gnu -lsndfile
+
+You can then run the program by executing:
+./rt
+
+FUTURE PLANS
+Make sure it works on Windows too.
+Make a GUI.
+Actually write a program implementing the algorithm......
