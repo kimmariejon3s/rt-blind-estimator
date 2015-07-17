@@ -6,10 +6,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sndfile.h>
+#include "kiss_fft.h"
+
+#define WINDOW_WIDTH	0.5
+#define OVERLAP		0.98
 
 /* Functions */
 int get_wav_data(void);
-int plot_wav();
+int plot_wav(short *wav_data, int channels, sf_count_t frames, int samprate);
 
 int main(void)
 {
@@ -23,11 +27,12 @@ int main(void)
 
 int get_wav_data(void) {
 	SF_INFO input_info;
-	input_info.format = 0;
 	short *wav_data;
-	unsigned long long ret;	
+	unsigned long long ret = 0;	
+	int i, j;
 
 	/* Open file */
+	input_info.format = 0;
 	SNDFILE *input = 
 		sf_open("/home/kim/wav_samples/mono_bach_partita_e_maj.wav",
 		SFM_READ, &input_info);
@@ -56,8 +61,25 @@ int get_wav_data(void) {
 		sf_close(input);
 		return -1;
 	}
+
+	/* Hilbert Transform */
 	
-	ret = plot_wav(wav_data, input_info.channels, input_info.frames);	
+
+	/* Octave band filtering */
+	
+
+#if 0	
+	ret = plot_wav(wav_data, input_info.channels, input_info.frames, 
+		input_info.samplerate);	
+
+	for (i = 0, k = 0; i < WINDOW_WIDTH; i += WINDOW_WIDTH * (1 - OVERLAP),
+	k++) {
+		for (j = 0; j < input_info.frames * input_info.channels ; j++) {
+			wav_data[j];
+		}
+	}
+
+#endif
 
 	free(wav_data);
 	sf_close(input);
@@ -65,9 +87,27 @@ int get_wav_data(void) {
 }
 
 
-int plot_wav(short **wav_data, int channels, sf_count_t frames)
+/* Function uses Gnuplot to plot the wav envelope */
+int plot_wav(short *wav_data, int channels, sf_count_t frames, int samprate)
 {
-	FILE *handle;
+	FILE *handle, *fp;
+	int i;
+
+	fp = fopen("foo.dat", "w");
+	if (fp == NULL) {
+		printf("Error opening file!\n");
+		return -1;
+	}
+
+	
+	fprintf(fp, "#Time\t\tAmplitude\n");
+	for (i = 0; i < channels * frames; i++) {
+	//for (i = 0; ((1/(double) samprate) * i) < 0.01; i++) {
+		fprintf(fp, "%.10lf\t%hd\n", (1/(double) samprate) * i, 
+			wav_data[i]);
+	}
+
+	fclose(fp);
 
 	handle = popen("gnuplot -persistent", "w");
 	if (handle == NULL) {
@@ -77,7 +117,7 @@ int plot_wav(short **wav_data, int channels, sf_count_t frames)
 
 	fprintf(handle, "set term gif\n");
 	fprintf(handle, "set output \"./wav.gif\"\n");
-	fprintf(handle, "plot sin(x)/x\n");	//test
+	fprintf(handle, "plot \"foo.dat\" with lines\n");	//test
 	fprintf(handle, "set output\n");
 	pclose(handle);
 

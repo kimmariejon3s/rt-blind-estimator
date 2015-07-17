@@ -10,7 +10,7 @@ platforms in the future, once I actually get it working. This readme is really
 just so that I remember what how to run it.
  
 To run the program, execute the following:
-gcc -o rt main.c -I /usr/include -L/usr/lib/x86_64-linux-gnu -lsndfile
+gcc -o rt main.c -I/usr/include -I./kiss_fft130 -L/usr/lib/x86_64-linux-gnu -lsndfile
 
 You can then run the program by executing:
 ./rt
