@@ -7,9 +7,17 @@
 #include <stdlib.h>
 #include <sndfile.h>
 #include "kiss_fft.h"
+#include <libswresample/swresample.h>
+#include <libavutil/channel_layout.h>
 
+#define MAX_CHUNK_SIZE	1024 * 1024 * 1024
 #define WINDOW_WIDTH	0.5
 #define OVERLAP		0.98
+
+/* Globals */
+int num_bands = 8;
+int octave_bands[] = {63, 125, 250, 500, 1000, 2000, 4000, 8000};
+int samp_freq_per_band[] = {3000, 3000, 3000, 3000, 3000, 6000, 12000, 24000};
 
 /* Functions */
 int get_wav_data(void);
@@ -62,10 +70,26 @@ int get_wav_data(void) {
 		return -1;
 	}
 
+	/* Specifications that apply to all subbands */
+	SwrContext *resamp = swr_alloc();
+	av_opt_set_int(resamp, "in_channel_layout", AV_CH_LAYOUT_MONO, 0);
+	av_opt_set_int(resamp, "out_channel_layout", AV_CH_LAYOUT_MONO, 0);
+	av_opt_set_int(resamp, "in_sample_rate", input_info.samplerate, 0);
+	av_opt_set_sample_fmt(resamp, "in_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+	av_opt_set_sample_fmt(resamp, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+
+	/* Octave band filtering */
+	for (i = 0; i < num_bands; i++) {
+		av_opt_set_int(resamp, "out_sample_rate", 
+			samp_freq_per_band, 0); 
+
+		swr_init(resamp);
+					
+	}	
+
 	/* Hilbert Transform */
 	
 
-	/* Octave band filtering */
 	
 
 #if 0	
