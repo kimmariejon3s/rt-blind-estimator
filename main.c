@@ -13,6 +13,10 @@
 #define MAX_CHUNK_SIZE	1024 * 1024 * 1024
 #define WINDOW_WIDTH	0.5
 #define OVERLAP		0.98
+#define MAX_SAMP_FREQ	24000	/* Max freq in samp_freq_per_band[] */
+
+//FIXME change this
+#define CHAN	1
 
 /* Globals */
 int num_bands = 8;
@@ -37,7 +41,7 @@ int get_wav_data(void) {
 	SF_INFO input_info;
 	short *wav_data;
 	unsigned long long ret = 0;	
-	int i, j;
+	int i, ret2;
 
 	/* Open file */
 	input_info.format = 0;
@@ -50,6 +54,9 @@ int get_wav_data(void) {
 		"Sections: %d\nSeekable: %d\n",(unsigned long long) 
 		input_info.frames, input_info.samplerate, input_info.channels, 
 		input_info.format, input_info.sections, input_info.seekable);
+
+	/* FIXME: insert check to make sure that the wav file is in the 
+	 *	expected format: mono and 16 bit signed??? */
 
 	/* Store data in array */
 	wav_data = (short *) calloc(input_info.frames * input_info.channels, 
@@ -70,8 +77,10 @@ int get_wav_data(void) {
 		return -1;
 	}
 
+	printf("DEBUG: resample\n");
 	/* Specifications that apply to all subbands */
 	SwrContext *resamp = swr_alloc();
+
 	av_opt_set_int(resamp, "in_channel_layout", AV_CH_LAYOUT_MONO, 0);
 	av_opt_set_int(resamp, "out_channel_layout", AV_CH_LAYOUT_MONO, 0);
 	av_opt_set_int(resamp, "in_sample_rate", input_info.samplerate, 0);
@@ -79,16 +88,48 @@ int get_wav_data(void) {
 	av_opt_set_sample_fmt(resamp, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
 
 	/* Octave band filtering */
-	for (i = 0; i < num_bands; i++) {
+	for (i = 0; i < 1; i++) {
 		av_opt_set_int(resamp, "out_sample_rate", 
-			samp_freq_per_band, 0); 
+			samp_freq_per_band[i], 0); 
 
-		swr_init(resamp);
-					
-	}	
+		ret2 = swr_init(resamp);
+
+		if (ret2 < 0) {
+			printf("Resample initialisation error\nExiting...\n");
+			free(wav_data);
+			sf_close(input);
+                	return -1;
+		}
+
+		uint8_t *output;
+		int out_samples = av_rescale_rnd(swr_get_delay(resamp, 
+			input_info.samplerate) + input_info.frames, 
+			samp_freq_per_band[i], input_info.samplerate, 
+			AV_ROUND_UP);
+
+		av_samples_alloc(&output, NULL, 1, out_samples, 
+			AV_SAMPLE_FMT_S16, 0);
+		out_samples = swr_convert(resamp, &output, out_samples,
+			(const uint8_t **) &wav_data, input_info.frames);
+
+		SF_INFO output_info;
+		output_info.samplerate = samp_freq_per_band[i];
+		output_info.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
+		output_info.channels = 1;
+
+		SNDFILE* otpt = sf_open("/home/kim/wav_samples/Z.wav", 
+			SFM_WRITE, &output_info);
+
+
+		sf_writef_short(otpt, (short *) output, out_samples);
+		
+
+
+	}
+	
 
 	/* Hilbert Transform */
-	
+	printf("DEBUG: Hilbert transform\n");	
 
 	
 
@@ -104,7 +145,6 @@ int get_wav_data(void) {
 	}
 
 #endif
-
 	free(wav_data);
 	sf_close(input);
 	return (int)ret;
