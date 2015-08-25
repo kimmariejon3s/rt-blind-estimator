@@ -17,6 +17,8 @@
 #define WINDOW_WIDTH	0.5
 #define OVERLAP		0.98
 #define OCT_FILT_ORDER	5
+#define ENV_FILT_ORDER	4
+#define LOW_PASS_CUTOFF	80
 
 /* Functions */
 int get_wav_data(void);
@@ -184,15 +186,20 @@ int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
 		/* Perform octave band filtering */
 
 	}
-	/* Hilbert Transform */
-	printf("DEBUG: Hilbert transform\n");
 }
 
 int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int samp_freq, const uint8_t **wav_data, int band) {
 	uint8_t *output_data;
-	int ret, resamp_frames;
+	int ret,i, resamp_frames;
+	float *filtered, *x, *env;
+
+#if OCT_FILT_ORDER >= ENV_FILT_ORDER	
 	float b[2 * OCT_FILT_ORDER + 1] = {0};
 	float a[2 * OCT_FILT_ORDER + 1] = {0};
+#else
+	float b[2 * ENV_FILT_ORDER + 1] = {0};
+	float a[2 * ENV_FILT_ORDER + 1] = {0};
+#endif
 
 	resamp_frames = av_rescale_rnd(swr_get_delay(resamp, in_rate) + 
 		num_frames, samp_freq, in_rate, AV_ROUND_UP);
@@ -214,30 +221,28 @@ int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int sa
 		return -1;
 	}
 
-	int i;
+	/* Bandpass filter - 7th and 8th parameter are ignored */
 	liquid_iirdes(LIQUID_IIRDES_BUTTER, LIQUID_IIRDES_BANDPASS, 
 		LIQUID_IIRDES_TF, OCT_FILT_ORDER, 
-		((float) band) / (sqrt(2.0) * ((float)samp_freq)),
+		((float) band) / (sqrt(2.0) * ((float)samp_freq)), 
 		((float) band) / ((float)samp_freq), 1.0, 1.0, b, a);
 
-	iirfilt_rrrf f_obj = iirfilt_rrrf_create(b, 2 *
+	iirfilt_rrrf f_obj_oct = iirfilt_rrrf_create(b, 2 *
 		OCT_FILT_ORDER + 1, a, 2 * OCT_FILT_ORDER + 1);
 
-	for (i = 0; i < 11; i++)
-		printf("b: %f a: %f\n", b[i], a[i]);
-	float y;
-	float *x;
 	x = (float *) output_data;
+	filtered = calloc(resamp_frames, sizeof(float)); 
 
-	for (i = 0; i < 100; i++) {
-		iirfilt_rrrf_execute(f_obj, x[i], &y);
-		printf("data%d: %f %f \n", i, x[i], y);
+	for (i = 0; i < resamp_frames; i++) {
+		iirfilt_rrrf_execute(f_obj_oct, x[i], &filtered[i]);
+//		printf("data%d: %f %f \n", i, x[i], filtered[i]);
 	}
 
-	iirfilt_rrrf_destroy(f_obj);
+	iirfilt_rrrf_destroy(f_obj_oct);
 	swr_free(&resamp);
 	av_freep(&output_data);
-
+	memset(b, 0, sizeof(b));
+	memset(a, 0, sizeof(a));
 
 #if 0
 	/* Generate wav to check resampled data is not garbage */
@@ -255,6 +260,29 @@ int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int sa
 //		want to return it!
 	return (float *)output_data;
 #endif
+
+	/* Low Pass Filter - 6th, 7th and 8th param are ignored */
+	printf("DEBUG: Low pass filter and Hilbert transform\n");
+	liquid_iirdes(LIQUID_IIRDES_BUTTER, LIQUID_IIRDES_LOWPASS, 
+		LIQUID_IIRDES_TF, ENV_FILT_ORDER, 
+		((float) LOW_PASS_CUTOFF) * 2.0 / ((float)samp_freq), 0.1, 
+		1.0, 1.0, b, a);
+
+	iirfilt_rrrf f_obj_env = iirfilt_rrrf_create(b, 2 *
+		ENV_FILT_ORDER + 1, a, 2 * ENV_FILT_ORDER + 1);
+
+	//FIXME: do I want to memset x to zero? Tried, got seg fault
+	env = calloc(resamp_frames, sizeof(float));
+
+	/* Get the Hilbert transform */
+
+	/* Get the full envelope */
+
+	/* Apply low pass filter to envelope */
+	for (i = 0; i < resamp_frames; i++) {
+//		iirfilt_rrrf_execute(f_obj_env, x[i], &env[i]);
+//		printf("data%d: %f %f \n", i, x[i], filtered[i]);
+	}
 
 	return 0;
 }
