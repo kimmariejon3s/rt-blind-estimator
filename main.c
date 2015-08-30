@@ -5,9 +5,10 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <sndfile.h>
 #include <math.h>
+#include <complex.h>
 #include "kiss_fft.h"
+#include <sndfile.h>
 #include <libswresample/swresample.h>
 #include <libavutil/channel_layout.h>
 #include <libavcodec/avcodec.h>
@@ -18,6 +19,13 @@
 #define OVERLAP		0.98
 #define OCT_FILT_ORDER	5
 #define ENV_FILT_ORDER	4
+#define N_OCT 		OCT_FILT_ORDER * 2
+#define R_OCT 		N_OCT % 2
+#define L_OCT 		(N_OCT - R_OCT) / 2
+
+#define N_ENV 		ENV_FILT_ORDER * 2
+#define R_ENV 		N_ENV % 2
+#define L_ENV 		(N_ENV - R_ENV) / 2
 #define LOW_PASS_CUTOFF	80
 
 /* Functions */
@@ -32,8 +40,26 @@ int num_bands = 8;
 int octave_bands[] = {63, 125, 250, 500, 1000, 2000, 4000, 8000};
 int samp_freq_per_band[] = {3000, 3000, 3000, 3000, 3000, 6000, 12000, 24000};
 
+/* Parameters as calculated by matlab */
 #if 0
-/* Parameters as calculated by matlab - currently not used */
+// 63 hz
+float but_b[11] = {
+		0.0000019065480398620, 0, -0.0000095327401993098,
+		0, 0.0000190654803986197, 0, -0.0000190654803986197,
+		0, 0.0000095327401993098, 0, -0.0000019065480398620
+};
+float but_a[11] = {1.0000000000000, -9.6137442795514, 4.16762001930964, -107.2819840395506, 181.6014605265677, -211.2216382366775, 170.09536018279864};
+
+//250 Hz
+float but_b[11] = {
+   	0.000125964124667, 0, -0.000629820623333, 0, 0.001259641246665, 0, 		-0.001259641246665, 0, 0.000629820623333, 0, -0.000125964124667};
+
+float but_a[11] = {
+	1.000000000000000, -7.610710971362601, 27.056928005646160, 
+	-58.995953452911763, 87.229825526402408, -91.305190165139038, 
+	68.499525784864559, -36.381079989157115, 13.104095798414871, 
+	-2.895830250311406, 0.299189780176664};
+
 float butter_b[8][11] = {
 	{1.0e-05 * 0.0191, 0, 1.0e-05 * -0.0953, 0, 1.0e-05 * 0.1907, 0, 
 		1.0e-05 * -0.1907, 0, 1.0e-05 * 0.0953, 0, 1.0e-05 * -0.0191},
@@ -190,15 +216,15 @@ int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
 
 int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int samp_freq, const uint8_t **wav_data, int band) {
 	uint8_t *output_data;
-	int ret,i, resamp_frames;
-	float *filtered, *x, *env;
+	int ret, i, resamp_frames, half_len;
+	float *filtered, *x, *env, atten;
 
-#if OCT_FILT_ORDER >= ENV_FILT_ORDER	
-	float b[2 * OCT_FILT_ORDER + 1] = {0};
-	float a[2 * OCT_FILT_ORDER + 1] = {0};
+#if OCT_FILT_ORDER >= ENV_FILT_ORDER
+	float b[3 * (L_OCT + R_OCT)] = {0};
+	float a[3 * (L_OCT + R_OCT)] = {0};
 #else
-	float b[2 * ENV_FILT_ORDER + 1] = {0};
-	float a[2 * ENV_FILT_ORDER + 1] = {0};
+	float b[3 * (L_ENV + R_ENV)] = {0};
+	float a[3 * (L_ENV + R_ENV)] = {0};
 #endif
 
 	resamp_frames = av_rescale_rnd(swr_get_delay(resamp, in_rate) + 
@@ -223,19 +249,26 @@ int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int sa
 
 	/* Bandpass filter - 7th and 8th parameter are ignored */
 	liquid_iirdes(LIQUID_IIRDES_BUTTER, LIQUID_IIRDES_BANDPASS, 
-		LIQUID_IIRDES_TF, OCT_FILT_ORDER, 
-		((float) band) / (sqrt(2.0) * ((float)samp_freq)), 
-		((float) band) / ((float)samp_freq), 1.0, 1.0, b, a);
+		LIQUID_IIRDES_SOS, OCT_FILT_ORDER, 
+		((float) band) / (sqrt(2.0) * ((float) samp_freq)), 
+		((float) band) / ((float) samp_freq), 1.0, 1.0, b, a);
+	//printf("res: %d\n\n", iirdes_isstable(b, a, 3 * (L_OCT + R_OCT)));
 
-	iirfilt_rrrf f_obj_oct = iirfilt_rrrf_create(b, 2 *
-		OCT_FILT_ORDER + 1, a, 2 * OCT_FILT_ORDER + 1);
+	for (i=0; i<(3 * (L_OCT + R_OCT)); i++)
+		printf("b: %f and a: %f\n", b[i], a[i]);		
+
+	iirfilt_rrrf f_obj_oct = iirfilt_rrrf_create_sos(b, a, (L_OCT + R_OCT));
 
 	x = (float *) output_data;
 	filtered = calloc(resamp_frames, sizeof(float)); 
+//	x[0] = -1.331623101849397e-06;
+//	x[1] = 6.919737431765877e-06;
+//	x[2] = 5.191250643456192e-05;
 
 	for (i = 0; i < resamp_frames; i++) {
 		iirfilt_rrrf_execute(f_obj_oct, x[i], &filtered[i]);
-//		printf("data%d: %f %f \n", i, x[i], filtered[i]);
+		if (i < 100)
+			printf("data%d: %lg %lg \n", i+1, (double) x[i], (double) filtered[i]);
 	}
 
 	iirfilt_rrrf_destroy(f_obj_oct);
@@ -268,13 +301,29 @@ int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int sa
 		((float) LOW_PASS_CUTOFF) * 2.0 / ((float)samp_freq), 0.1, 
 		1.0, 1.0, b, a);
 
+
 	iirfilt_rrrf f_obj_env = iirfilt_rrrf_create(b, 2 *
 		ENV_FILT_ORDER + 1, a, 2 * ENV_FILT_ORDER + 1);
 
 	//FIXME: do I want to memset x to zero? Tried, got seg fault
 	env = calloc(resamp_frames, sizeof(float));
+	float complex *hilb = calloc(resamp_frames, sizeof(float complex));
 
 	/* Get the Hilbert transform */
+	half_len = 5;
+	atten = 60.0;
+
+	firhilbf t_obj = firhilbf_create(half_len, atten);
+
+	for (i = 0; i < resamp_frames; i++) {
+		firhilbf_decim_execute(t_obj, &filtered[i], &hilb[i]);
+
+	//	if (i < 100)
+	//		printf("%d: filtered:%f done: %f + i%f\n", i, filtered[i], creal(hilb[i]), cimag(hilb[i]));
+	}
+
+
+	firhilbf_destroy(t_obj);	
 
 	/* Get the full envelope */
 
