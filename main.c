@@ -7,12 +7,12 @@
 #include <stdlib.h>
 #include <math.h>
 #include <complex.h>
-#include "kiss_fft.h"
 #include <sndfile.h>
 #include <libswresample/swresample.h>
 #include <libavutil/channel_layout.h>
 #include <libavcodec/avcodec.h>
 #include <liquid/liquid.h>
+#include "kiss_fft.h"
 
 #define MAX_CHUNK_SIZE	1024 * 1024 * 1024
 #define WINDOW_WIDTH	0.5
@@ -23,7 +23,7 @@
 #define R_OCT 		N_OCT % 2
 #define L_OCT 		(N_OCT - R_OCT) / 2
 
-#define N_ENV 		ENV_FILT_ORDER * 2
+#define N_ENV 		ENV_FILT_ORDER
 #define R_ENV 		N_ENV % 2
 #define L_ENV 		(N_ENV - R_ENV) / 2
 #define LOW_PASS_CUTOFF	80
@@ -216,7 +216,7 @@ int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
 
 int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int samp_freq, const uint8_t **wav_data, int band) {
 	uint8_t *output_data;
-	int ret, i, resamp_frames, half_len;
+	int ret, i, j, resamp_frames, half_len, flags;
 	float *filtered, *x, *env, atten;
 
 #if OCT_FILT_ORDER >= ENV_FILT_ORDER
@@ -254,8 +254,8 @@ int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int sa
 		((float) band) / ((float) samp_freq), 1.0, 1.0, b, a);
 	//printf("res: %d\n\n", iirdes_isstable(b, a, 3 * (L_OCT + R_OCT)));
 
-	for (i=0; i<(3 * (L_OCT + R_OCT)); i++)
-		printf("b: %f and a: %f\n", b[i], a[i]);		
+//	for (i=0; i<(3 * (L_OCT + R_OCT)); i++)
+//		printf("b: %f and a: %f\n", b[i], a[i]);		
 
 	iirfilt_rrrf f_obj_oct = iirfilt_rrrf_create_sos(b, a, (L_OCT + R_OCT));
 
@@ -267,8 +267,8 @@ int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int sa
 
 	for (i = 0; i < resamp_frames; i++) {
 		iirfilt_rrrf_execute(f_obj_oct, x[i], &filtered[i]);
-		if (i < 100)
-			printf("data%d: %lg %lg \n", i+1, (double) x[i], (double) filtered[i]);
+	//	if (i < 100)
+	//		printf("data%d: %lg %lg \n", i+1, (double) x[i], (double) filtered[i]);
 	}
 
 	iirfilt_rrrf_destroy(f_obj_oct);
@@ -297,33 +297,73 @@ int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int sa
 	/* Low Pass Filter - 6th, 7th and 8th param are ignored */
 	printf("DEBUG: Low pass filter and Hilbert transform\n");
 	liquid_iirdes(LIQUID_IIRDES_BUTTER, LIQUID_IIRDES_LOWPASS, 
-		LIQUID_IIRDES_TF, ENV_FILT_ORDER, 
-		((float) LOW_PASS_CUTOFF) * 2.0 / ((float)samp_freq), 0.1, 
+		LIQUID_IIRDES_SOS, ENV_FILT_ORDER, 
+		((float) LOW_PASS_CUTOFF) / ((float)samp_freq), 0.1, 
 		1.0, 1.0, b, a);
 
-
-	iirfilt_rrrf f_obj_env = iirfilt_rrrf_create(b, 2 *
-		ENV_FILT_ORDER + 1, a, 2 * ENV_FILT_ORDER + 1);
+	iirfilt_rrrf f_obj_env = iirfilt_rrrf_create_sos(b, a, (L_ENV + R_ENV));
 
 	//FIXME: do I want to memset x to zero? Tried, got seg fault
 	env = calloc(resamp_frames, sizeof(float));
+
+	flags = 0;
+	
+	float complex *filt_complex = calloc(resamp_frames, sizeof(float complex));
+	float complex *tmp = calloc(resamp_frames, sizeof(float complex));
+	float complex *tmp2 = calloc(resamp_frames, sizeof(float complex));
 	float complex *hilb = calloc(resamp_frames, sizeof(float complex));
 
-	/* Get the Hilbert transform */
-	half_len = 5;
-	atten = 60.0;
+	fftplan fft_pln = fft_create_plan(resamp_frames, (float complex *) 
+		filt_complex, (float complex *) tmp, LIQUID_FFT_FORWARD, flags);
+	fftplan ifft_pln = fft_create_plan(resamp_frames, (float complex *) tmp,
+ 		(float complex *) hilb, LIQUID_FFT_BACKWARD, flags);
 
-	firhilbf t_obj = firhilbf_create(half_len, atten);
+	fft_execute(ifft_pln);
 
-	for (i = 0; i < resamp_frames; i++) {
-		firhilbf_decim_execute(t_obj, &filtered[i], &hilb[i]);
+	/* Get the Hilbert transform - really it's the analytic signal as the
+		Hilbert transform is stored in the imaginary part of the soln */
+	for (i = 0; i < resamp_frames; i+= 1)
+		filt_complex[i] = (float complex)filtered[i];
 
-	//	if (i < 100)
-	//		printf("%d: filtered:%f done: %f + i%f\n", i, filtered[i], creal(hilb[i]), cimag(hilb[i]));
+	fft_execute(fft_pln);	
+
+	for (i = 0; i < resamp_frames; i+= 1) {
+		j = i + 1;
+		tmp[i] *= (1.0);
+
+		if (resamp_frames % 2 == 0) {
+			/* Even number of samples */
+			/* Set if value should be non-zero (array contains zeros)*/
+			if (j == 1 || j == ((resamp_frames / 2) + 1))
+				tmp2[i] = 1.0;
+			else if (j >= 2 && j <= (resamp_frames / 2))
+				tmp2[i] = 2.0;
+		} else {
+			/* Odd number of samples */
+			/* Set if value should be non-zero (array contains zeros)*/
+			if (j == 1)
+				tmp2[i] = 1.0;
+			else if (j >= 2 && j <= (resamp_frames + 1) / 2)
+				tmp2[i] = 2.0;
+		}
+
+		tmp[i] *= tmp2[i];
 	}
 
 
-	firhilbf_destroy(t_obj);	
+	fft_execute(ifft_pln);
+	for (i = 0; i < 100; i++) {
+		hilb[i] *= (1.0 / resamp_frames);
+		printf("%d: %lg +i%lg\n\t%lg +i%lg\n", i, 
+			creal(filt_complex[i]), cimag(filt_complex[i]), 
+			creal(hilb[i]), cimag(hilb[i]));
+	}
+
+	//FIXME: why is this causing a fre pointer error???
+	//fft_destroy_plan(fft_pln);
+	free(tmp);
+	free(tmp2);
+	iirfilt_rrrf_destroy(f_obj_env);
 
 	/* Get the full envelope */
 
@@ -337,22 +377,6 @@ int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int sa
 }
 
 
-
-#if 0
-int octave_filter_wav() {
-	int i;
-
-	iirfilt_rrrf f_obj = iirfilt_rrrf_create(butter_b[0], 2 * 
-		OCT_FILT_ORDER + 1, butter_a[0], 2 * OCT_FILT_ORDER + 1);
-	float y[100];
-
-	for (i = 0; i < 100; i++) {
-		iirfilt_rrrf_execute(f_obj, (float) output_data[i], &y[i]);
-		printf("data%d: %f %f\n", i, (float)output_data[i], y[i]);
-	}
-	av_freep(&output_data);
-}
-#endif
 /* Function uses Gnuplot to plot the wav envelope */
 int plot_wav(float *wav_data, int channels, sf_count_t frames, int samprate)
 {
