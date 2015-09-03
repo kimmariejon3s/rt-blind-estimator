@@ -31,14 +31,26 @@
 /* Functions */
 int get_wav_data(void);
 int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input);
-int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, 
-	int samp_freq, const uint8_t **wav_data, int band);
+float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, 
+	int samp_freq, const uint8_t **wav_data, int band, int *resamp_frms);
+int oct_filt_data(float *output_data, float band, float samp_freq, 
+	float **filtered_wav, int resamp_frames);
+int get_envelope(float samp_freq, float *resampled_wav, float complex **p, 
+	int resamp_frames);
 int plot_wav(float *wav_data, int channels, sf_count_t frames, int samprate);
 
 /* Globals */
 int num_bands = 8;
 int octave_bands[] = {63, 125, 250, 500, 1000, 2000, 4000, 8000};
 int samp_freq_per_band[] = {3000, 3000, 3000, 3000, 3000, 6000, 12000, 24000};
+
+#if OCT_FILT_ORDER >= ENV_FILT_ORDER
+	float b[3 * (L_OCT + R_OCT)] = {0};
+	float a[3 * (L_OCT + R_OCT)] = {0};
+#else
+	float b[3 * (L_ENV + R_ENV)] = {0};
+	float a[3 * (L_ENV + R_ENV)] = {0};
+#endif
 
 /* Parameters as calculated by matlab */
 #if 0
@@ -169,8 +181,9 @@ int get_wav_data(void) {
 
 
 int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
-	int i, ret = 0;
-	float *resampled_wav;	
+	int i, j, ret, resamp_frames = 0;
+	float *resampled_wav, *filtered_wav;	
+	float complex *p;
 
 	printf("DEBUG: resample init\n");
 
@@ -199,33 +212,35 @@ int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
 		}
 
 		/* Resample the audio */
-		ret = resamp_wav_data(resamp, input_info.samplerate, 
+		resampled_wav = resamp_wav_data(resamp, input_info.samplerate, 
 			(uint64_t) input_info.frames, samp_freq_per_band[i],
-			(const uint8_t **) &wav_data, octave_bands[i]);
+			(const uint8_t **) &wav_data, octave_bands[i], 
+			&resamp_frames);
 
-		if (ret < 0) {
+		if (resamp_frames <= 0 || resampled_wav == NULL) {
 			free(wav_data);
 			sf_close(input);
 			return -1;
 		}
 
-		/* Perform octave band filtering */
-
+		/* Octave band filtering */
+		oct_filt_data(resampled_wav, (float) octave_bands[i], 
+			(float) samp_freq_per_band[i] , &filtered_wav, 
+			resamp_frames);
+		
+		/* Obtain signal envelope */
+		get_envelope((float) samp_freq_per_band[i], resampled_wav, &p,
+			resamp_frames);
+		
+			
 	}
+	return 0;
 }
 
-int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int samp_freq, const uint8_t **wav_data, int band) {
+float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int samp_freq, const uint8_t **wav_data, int band, int *resamp_frms) {
 	uint8_t *output_data;
-	int ret, i, j, resamp_frames, half_len, flags;
-	float *filtered, *x, *env, atten;
-
-#if OCT_FILT_ORDER >= ENV_FILT_ORDER
-	float b[3 * (L_OCT + R_OCT)] = {0};
-	float a[3 * (L_OCT + R_OCT)] = {0};
-#else
-	float b[3 * (L_ENV + R_ENV)] = {0};
-	float a[3 * (L_ENV + R_ENV)] = {0};
-#endif
+	int ret, resamp_frames;
+	float *x;
 
 	resamp_frames = av_rescale_rnd(swr_get_delay(resamp, in_rate) + 
 		num_frames, samp_freq, in_rate, AV_ROUND_UP);
@@ -235,7 +250,7 @@ int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int sa
 
 	if (ret < 0) {
 		printf("Output buffer alloc failure\nExiting...\n");
-		return -1;
+		return NULL;
 	}
 
 	resamp_frames = swr_convert(resamp, &output_data, resamp_frames,
@@ -244,38 +259,9 @@ int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int sa
 	if (resamp_frames < 0) {
 		printf("Resampling failure\nExiting...\n");
 		av_freep(&output_data);
-		return -1;
+		return NULL;
 	}
 
-	/* Bandpass filter - 7th and 8th parameter are ignored */
-	liquid_iirdes(LIQUID_IIRDES_BUTTER, LIQUID_IIRDES_BANDPASS, 
-		LIQUID_IIRDES_SOS, OCT_FILT_ORDER, 
-		((float) band) / (sqrt(2.0) * ((float) samp_freq)), 
-		((float) band) / ((float) samp_freq), 1.0, 1.0, b, a);
-	//printf("res: %d\n\n", iirdes_isstable(b, a, 3 * (L_OCT + R_OCT)));
-
-//	for (i=0; i<(3 * (L_OCT + R_OCT)); i++)
-//		printf("b: %f and a: %f\n", b[i], a[i]);		
-
-	iirfilt_rrrf f_obj_oct = iirfilt_rrrf_create_sos(b, a, (L_OCT + R_OCT));
-
-	x = (float *) output_data;
-	filtered = calloc(resamp_frames, sizeof(float)); 
-//	x[0] = -1.331623101849397e-06;
-//	x[1] = 6.919737431765877e-06;
-//	x[2] = 5.191250643456192e-05;
-
-	for (i = 0; i < resamp_frames; i++) {
-		iirfilt_rrrf_execute(f_obj_oct, x[i], &filtered[i]);
-	//	if (i < 100)
-	//		printf("data%d: %lg %lg \n", i+1, (double) x[i], (double) filtered[i]);
-	}
-
-	iirfilt_rrrf_destroy(f_obj_oct);
-	swr_free(&resamp);
-	av_freep(&output_data);
-	memset(b, 0, sizeof(b));
-	memset(a, 0, sizeof(a));
 
 #if 0
 	/* Generate wav to check resampled data is not garbage */
@@ -288,42 +274,80 @@ int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int sa
 		SFM_WRITE, &output_info);
 
 	sf_write_float(otpt, (float *) output_data, resamp_frames);
-
-//	FIXME: DO I want to return output_data or an int? Don't free it if I 
-//		want to return it!
-	return (float *)output_data;
 #endif
 
-	/* Low Pass Filter - 6th, 7th and 8th param are ignored */
-	printf("DEBUG: Low pass filter and Hilbert transform\n");
-	liquid_iirdes(LIQUID_IIRDES_BUTTER, LIQUID_IIRDES_LOWPASS, 
-		LIQUID_IIRDES_SOS, ENV_FILT_ORDER, 
-		((float) LOW_PASS_CUTOFF) / ((float)samp_freq), 0.1, 
-		1.0, 1.0, b, a);
 
-	iirfilt_rrrf f_obj_env = iirfilt_rrrf_create_sos(b, a, (L_ENV + R_ENV));
+	swr_free(&resamp);
+//FIXME: free output_data ptr at end!
+//	av_freep(&output_data);
 
-	//FIXME: do I want to memset x to zero? Tried, got seg fault
-	env = calloc(resamp_frames, sizeof(float));
+	/* Store # frames in pointer */
+	*resamp_frms = resamp_frames;
 
-	flags = 0;
-	
+	/* Return pointer to beginning of data */
+	return (float *) output_data;
+}
+
+int oct_filt_data(float *resamp_data, float band, float samp_freq, float **filtered_wav, int resamp_frames) {
+	int i;
+	float *filtered = calloc(resamp_frames, sizeof(float)); 
+
+	/* Create bandpass filter - 7th and 8th parameter are ignored */
+	liquid_iirdes(LIQUID_IIRDES_BUTTER, LIQUID_IIRDES_BANDPASS, 
+		LIQUID_IIRDES_SOS, OCT_FILT_ORDER, 
+		band / (sqrt(2.0) * samp_freq), 
+		band / samp_freq, 1.0, 1.0, b, a);
+	//printf("res: %d\n\n", iirdes_isstable(b, a, 3 * (L_OCT + R_OCT)));
+
+//	for (i=0; i<(3 * (L_OCT + R_OCT)); i++)
+//		printf("b: %f and a: %f\n", b[i], a[i]);		
+
+	iirfilt_rrrf f_obj_oct = iirfilt_rrrf_create_sos(b, a, (L_OCT + R_OCT));
+
+
+	/* Filter data */
+	for (i = 0; i < resamp_frames; i++) 
+		iirfilt_rrrf_execute(f_obj_oct, resamp_data[i], &filtered[i]);
+
+	/* Store data for return to previous function */
+	filtered_wav = &filtered;
+
+	/* Free filter and reset coefficient arrays */
+	iirfilt_rrrf_destroy(f_obj_oct);
+}
+
+
+int get_envelope(float samp_freq, float *resampled_wav, float complex **env,
+		int resamp_frames) {
 	float complex *filt_complex = calloc(resamp_frames, sizeof(float complex));
 	float complex *tmp = calloc(resamp_frames, sizeof(float complex));
 	float complex *tmp2 = calloc(resamp_frames, sizeof(float complex));
 	float complex *hilb = calloc(resamp_frames, sizeof(float complex));
+	int i, j;
+
+	memset(b, 0, sizeof(b));
+	memset(a, 0, sizeof(a));
+
+	/* Create Low Pass Filter - 6th, 7th and 8th param are ignored */
+	printf("DEBUG: Low pass filter and Hilbert transform\n");
+	liquid_iirdes(LIQUID_IIRDES_BUTTER, LIQUID_IIRDES_LOWPASS, 
+		LIQUID_IIRDES_SOS, ENV_FILT_ORDER, 
+		((float) LOW_PASS_CUTOFF) / samp_freq, 0.1, 
+		1.0, 1.0, b, a);
+
+	iirfilt_crcf f_obj_env = iirfilt_crcf_create_sos(b, a, (L_ENV + R_ENV));
 
 	fftplan fft_pln = fft_create_plan(resamp_frames, (float complex *) 
-		filt_complex, (float complex *) tmp, LIQUID_FFT_FORWARD, flags);
+		filt_complex, (float complex *) tmp, LIQUID_FFT_FORWARD, 0);
 	fftplan ifft_pln = fft_create_plan(resamp_frames, (float complex *) tmp,
- 		(float complex *) hilb, LIQUID_FFT_BACKWARD, flags);
+ 		(float complex *) hilb, LIQUID_FFT_BACKWARD, 0);
 
 	fft_execute(ifft_pln);
 
 	/* Get the Hilbert transform - really it's the analytic signal as the
 		Hilbert transform is stored in the imaginary part of the soln */
 	for (i = 0; i < resamp_frames; i+= 1)
-		filt_complex[i] = (float complex)filtered[i];
+		filt_complex[i] = (float complex) resampled_wav[i];
 
 	fft_execute(fft_pln);	
 
@@ -352,26 +376,33 @@ int resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int sa
 
 
 	fft_execute(ifft_pln);
-	for (i = 0; i < 100; i++) {
+
+	for (i = 0; i < resamp_frames; i++) {
+		/* Normalisation correction */
 		hilb[i] *= (1.0 / resamp_frames);
-		printf("%d: %lg +i%lg\n\t%lg +i%lg\n", i, 
-			creal(filt_complex[i]), cimag(filt_complex[i]), 
-			creal(hilb[i]), cimag(hilb[i]));
+	
+		/* Get envelope */
+		hilb[i] = csqrtf(filt_complex[i] * filt_complex[i] + 
+			hilb[i] * hilb[i]);
+
+		/* Apply low pass filter to envelope */
+		iirfilt_crcf_execute(f_obj_env, hilb[i], &tmp[i]);
+		tmp[i] = cabsf(tmp[i]);
+
+		if (i < 10)
+			printf("%lg +i%lg\n", creal(tmp[i]), cimag(tmp[i]));
 	}
+
+	/* Store envelope pointer for return to previous function */
+	env = &tmp;
 
 	//FIXME: why is this causing a fre pointer error???
 	//fft_destroy_plan(fft_pln);
 	free(tmp);
 	free(tmp2);
-	iirfilt_rrrf_destroy(f_obj_env);
-
-	/* Get the full envelope */
-
-	/* Apply low pass filter to envelope */
-	for (i = 0; i < resamp_frames; i++) {
-//		iirfilt_rrrf_execute(f_obj_env, x[i], &env[i]);
-//		printf("data%d: %f %f \n", i, x[i], filtered[i]);
-	}
+	free(hilb);
+	free(filt_complex);
+	iirfilt_crcf_destroy(f_obj_env);
 
 	return 0;
 }
