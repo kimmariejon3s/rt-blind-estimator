@@ -33,9 +33,9 @@ int get_wav_data(void);
 int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input);
 float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, 
 	int samp_freq, const uint8_t **wav_data, int band, int *resamp_frms);
-int oct_filt_data(float *output_data, float band, float samp_freq, 
-	float **filtered_wav, int resamp_frames);
-int get_envelope(float samp_freq, float *resampled_wav, float complex **p, 
+float * oct_filt_data(float *output_data, float band, float samp_freq, 
+	int resamp_frames);
+float complex * get_envelope(float samp_freq, float *resampled_wav, 
 	int resamp_frames);
 int plot_wav(float *wav_data, int channels, sf_count_t frames, int samprate);
 
@@ -183,7 +183,7 @@ int get_wav_data(void) {
 int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
 	int i, j, ret, resamp_frames = 0;
 	float *resampled_wav, *filtered_wav;	
-	float complex *p;
+	float complex *env;
 
 	printf("DEBUG: resample init\n");
 
@@ -224,12 +224,12 @@ int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
 		}
 
 		/* Octave band filtering */
-		oct_filt_data(resampled_wav, (float) octave_bands[i], 
-			(float) samp_freq_per_band[i] , &filtered_wav, 
+		filtered_wav = oct_filt_data(resampled_wav, 
+			(float) octave_bands[i], (float) samp_freq_per_band[i],
 			resamp_frames);
 		
 		/* Obtain signal envelope */
-		get_envelope((float) samp_freq_per_band[i], resampled_wav, &p,
+		env = get_envelope((float) samp_freq_per_band[i], filtered_wav, 
 			resamp_frames);
 		
 			
@@ -288,7 +288,7 @@ float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, in
 	return (float *) output_data;
 }
 
-int oct_filt_data(float *resamp_data, float band, float samp_freq, float **filtered_wav, int resamp_frames) {
+float * oct_filt_data(float *resamp_data, float band, float samp_freq, int resamp_frames) {
 	int i;
 	float *filtered = calloc(resamp_frames, sizeof(float)); 
 
@@ -309,15 +309,15 @@ int oct_filt_data(float *resamp_data, float band, float samp_freq, float **filte
 	for (i = 0; i < resamp_frames; i++) 
 		iirfilt_rrrf_execute(f_obj_oct, resamp_data[i], &filtered[i]);
 
-	/* Store data for return to previous function */
-	filtered_wav = &filtered;
-
 	/* Free filter and reset coefficient arrays */
 	iirfilt_rrrf_destroy(f_obj_oct);
+
+	/* fiiltered data: return to previous function */
+	return filtered;
 }
 
 
-int get_envelope(float samp_freq, float *resampled_wav, float complex **env,
+float complex * get_envelope(float samp_freq, float *filtered_wav, 
 		int resamp_frames) {
 	float complex *filt_complex = calloc(resamp_frames, sizeof(float complex));
 	float complex *tmp = calloc(resamp_frames, sizeof(float complex));
@@ -342,18 +342,15 @@ int get_envelope(float samp_freq, float *resampled_wav, float complex **env,
 	fftplan ifft_pln = fft_create_plan(resamp_frames, (float complex *) tmp,
  		(float complex *) hilb, LIQUID_FFT_BACKWARD, 0);
 
-	fft_execute(ifft_pln);
-
 	/* Get the Hilbert transform - really it's the analytic signal as the
 		Hilbert transform is stored in the imaginary part of the soln */
 	for (i = 0; i < resamp_frames; i+= 1)
-		filt_complex[i] = (float complex) resampled_wav[i];
+		filt_complex[i] = (float complex) filtered_wav[i];
 
 	fft_execute(fft_pln);	
 
 	for (i = 0; i < resamp_frames; i+= 1) {
 		j = i + 1;
-		tmp[i] *= (1.0);
 
 		if (resamp_frames % 2 == 0) {
 			/* Even number of samples */
@@ -380,7 +377,7 @@ int get_envelope(float samp_freq, float *resampled_wav, float complex **env,
 	for (i = 0; i < resamp_frames; i++) {
 		/* Normalisation correction */
 		hilb[i] *= (1.0 / resamp_frames);
-	
+
 		/* Get envelope */
 		hilb[i] = csqrtf(filt_complex[i] * filt_complex[i] + 
 			hilb[i] * hilb[i]);
@@ -389,22 +386,19 @@ int get_envelope(float samp_freq, float *resampled_wav, float complex **env,
 		iirfilt_crcf_execute(f_obj_env, hilb[i], &tmp[i]);
 		tmp[i] = cabsf(tmp[i]);
 
-		if (i < 10)
-			printf("%lg +i%lg\n", creal(tmp[i]), cimag(tmp[i]));
 	}
 
-	/* Store envelope pointer for return to previous function */
-	env = &tmp;
 
 	//FIXME: why is this causing a fre pointer error???
 	//fft_destroy_plan(fft_pln);
-	free(tmp);
+	//DONT FREE TMP
 	free(tmp2);
 	free(hilb);
 	free(filt_complex);
 	iirfilt_crcf_destroy(f_obj_env);
 
-	return 0;
+	/* envelope pointer: return to previous function */
+	return tmp;
 }
 
 
