@@ -27,6 +27,10 @@
 #define R_ENV 		N_ENV % 2
 #define L_ENV 		(N_ENV - R_ENV) / 2
 #define LOW_PASS_CUTOFF	80
+#define DAMP_SEG_SIZE	0.5
+#define DAMP_STEP_SIZE	0.002
+#define MAX_RT		100	
+#define MIN_RT		0.005	
 
 /* Functions */
 int get_wav_data(void);
@@ -35,8 +39,9 @@ float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames,
 	int samp_freq, const uint8_t **wav_data, int band, int *resamp_frms);
 float * oct_filt_data(float *output_data, float band, float samp_freq, 
 	int resamp_frames);
-float complex * get_envelope(float samp_freq, float *resampled_wav, 
+float * get_envelope(float samp_freq, float *resampled_wav, 
 	int resamp_frames);
+float * apply_polyfit(float samp_freq, int resamp_frames, float *env);
 int plot_wav(float *wav_data, int channels, sf_count_t frames, int samprate);
 
 /* Globals */
@@ -181,9 +186,8 @@ int get_wav_data(void) {
 
 
 int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
-	int i, j, ret, resamp_frames = 0;
-	float *resampled_wav, *filtered_wav;	
-	float complex *env;
+	int i, ret, resamp_frames = 0;
+	float *resampled_wav, *filtered_wav, *env;
 
 	printf("DEBUG: resample init\n");
 
@@ -231,8 +235,10 @@ int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
 		/* Obtain signal envelope */
 		env = get_envelope((float) samp_freq_per_band[i], filtered_wav, 
 			resamp_frames);
-		
-			
+
+		/* Polyfit algorithm */
+		apply_polyfit((float) samp_freq_per_band[i], resamp_frames, 
+			env);
 	}
 	return 0;
 }
@@ -317,13 +323,16 @@ float * oct_filt_data(float *resamp_data, float band, float samp_freq, int resam
 }
 
 
-float complex * get_envelope(float samp_freq, float *filtered_wav, 
+float * get_envelope(float samp_freq, float *filtered_wav, 
 		int resamp_frames) {
 	float complex *filt_complex = calloc(resamp_frames, sizeof(float complex));
 	float complex *tmp = calloc(resamp_frames, sizeof(float complex));
 	float complex *tmp2 = calloc(resamp_frames, sizeof(float complex));
 	float complex *hilb = calloc(resamp_frames, sizeof(float complex));
+	float *env = calloc(resamp_frames, sizeof(float));
 	int i, j;
+
+	//FIXME add calloc NULL check	
 
 	memset(b, 0, sizeof(b));
 	memset(a, 0, sizeof(a));
@@ -384,23 +393,77 @@ float complex * get_envelope(float samp_freq, float *filtered_wav,
 
 		/* Apply low pass filter to envelope */
 		iirfilt_crcf_execute(f_obj_env, hilb[i], &tmp[i]);
-		tmp[i] = cabsf(tmp[i]);
+		env[i] = cabsf(tmp[i]);
 
 	}
 
 
 	//FIXME: why is this causing a fre pointer error???
 	//fft_destroy_plan(fft_pln);
-	//DONT FREE TMP
+	//DONT FREE ENV
 	free(tmp2);
+	free(tmp);
 	free(hilb);
 	free(filt_complex);
 	iirfilt_crcf_destroy(f_obj_env);
 
 	/* envelope pointer: return to previous function */
-	return tmp;
+	return env;
 }
 
+
+float * apply_polyfit(float samp_freq, int resamp_frames, float *env) {
+	int i, j, seg_size, step_size, num_segs, dim_2d = 2, poly_coeff = 2;
+	float *poly_param, **poly_res, *poly_seg, max_poly_res, min_poly_res;
+	float *poly, *log_env = calloc(resamp_frames, sizeof(float));
+	//FIXME: add calloc NULL check
+
+	for (i = 0; i < resamp_frames; i++)
+		log_env[i] = log10f(env[i]);
+
+	seg_size = (int) floorf(samp_freq * DAMP_SEG_SIZE);
+
+	step_size = (int) floorf(samp_freq * DAMP_STEP_SIZE);
+
+	num_segs = (int) floorf((resamp_frames - seg_size) / step_size + 1);
+
+	//FIXME: add calloc NULL check
+	poly_param = calloc(seg_size, sizeof(float));
+	poly_res = calloc(num_segs, sizeof(float *));
+	poly_seg = calloc(seg_size, sizeof(float));
+	poly = calloc(poly_coeff, sizeof(float));
+
+	for (i = 0; i < dim_2d; i++) 
+		poly_res[i] = calloc(dim_2d, sizeof(float));
+
+	/* Fill in Polyfit function parameter */
+	for (i = 0; i < seg_size; i++)
+		poly_param[i] = i + 1;
+
+	max_poly_res = -log10f(exp(6.91 / MAX_RT / samp_freq));
+	min_poly_res = -log10f(exp(6.91 / MIN_RT / samp_freq));
+
+	for (i = 0; i < num_segs; i++) {
+		for (j = i * step_size; j < i * step_size + seg_size; j++)
+			poly_seg[j - i * step_size] = log_env[j];
+	
+		polyf_fit(poly_param, poly_seg, seg_size, poly, poly_coeff);
+	
+		//TODO: CHECK MATLAB POLYFIT COEFFS
+		//TODO: CHECK MATLAB VALUES UP TO HERE
+//		for (j = 0; j < poly_coeff; j++)
+//			printf("%lf\n", poly[j]);
+	}
+
+
+	/* Free 2d arrays */
+	for (i = 0; i < dim_2d; i++) 
+		free(poly_res[i]);
+	
+	free(poly_seg);
+	free(poly_res);
+	return NULL;
+}
 
 /* Function uses Gnuplot to plot the wav envelope */
 int plot_wav(float *wav_data, int channels, sf_count_t frames, int samprate)
