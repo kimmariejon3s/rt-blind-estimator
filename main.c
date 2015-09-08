@@ -413,7 +413,7 @@ float * get_envelope(float samp_freq, float *filtered_wav,
 
 
 float * apply_polyfit(float samp_freq, int resamp_frames, float *env) {
-	int i, j, seg_size, step_size, num_segs, dim_2d = 2, poly_coeff = 2;
+	int i, j, seg_size, step_size, num_segs, poly_coeff = 2;
 	float *poly_param, **poly_res, *poly_seg, max_poly_res, min_poly_res;
 	float *poly, *log_env = calloc(resamp_frames, sizeof(float));
 	//FIXME: add calloc NULL check
@@ -433,8 +433,8 @@ float * apply_polyfit(float samp_freq, int resamp_frames, float *env) {
 	poly_seg = calloc(seg_size, sizeof(float));
 	poly = calloc(poly_coeff, sizeof(float));
 
-	for (i = 0; i < dim_2d; i++) 
-		poly_res[i] = calloc(dim_2d, sizeof(float));
+	for (i = 0; i < num_segs; i++) 
+		poly_res[i] = calloc(poly_coeff, sizeof(float));
 
 	/* Fill in Polyfit function parameter */
 	for (i = 0; i < seg_size; i++)
@@ -447,17 +447,18 @@ float * apply_polyfit(float samp_freq, int resamp_frames, float *env) {
 		for (j = i * step_size; j < i * step_size + seg_size; j++)
 			poly_seg[j - i * step_size] = log_env[j];
 	
-		polyf_fit(poly_param, poly_seg, seg_size, poly, poly_coeff);
-	
+		polyf_fit(poly_param, poly_seg, seg_size, &poly_res[i][0], 
+			poly_coeff);
+
 		//TODO: CHECK MATLAB POLYFIT COEFFS
 		//TODO: CHECK MATLAB VALUES UP TO HERE
-//		for (j = 0; j < poly_coeff; j++)
-//			printf("%lf\n", poly[j]);
+		for (j = 0; j < poly_coeff; j++)
+			printf("%lf\n", poly_res[i][j]);
 	}
 
 
 	/* Free 2d arrays */
-	for (i = 0; i < dim_2d; i++) 
+	for (i = 0; i < num_segs; i++) 
 		free(poly_res[i]);
 	
 	free(poly_seg);
