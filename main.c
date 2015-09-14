@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <complex.h>
+#include <float.h>
 #include <sndfile.h>
 #include <libswresample/swresample.h>
 #include <libavutil/channel_layout.h>
@@ -42,6 +43,7 @@ float * oct_filt_data(float *output_data, float band, float samp_freq,
 float * get_envelope(float samp_freq, float *resampled_wav, 
 	int resamp_frames);
 float * apply_polyfit(float samp_freq, int resamp_frames, float *env);
+int ** choose_segments(float *var, int step_size, int len, int not_dumped);
 int plot_wav(float *wav_data, int channels, sf_count_t frames, int samprate);
 
 /* Globals */
@@ -394,7 +396,8 @@ float * get_envelope(float samp_freq, float *filtered_wav,
 		/* Apply low pass filter to envelope */
 		iirfilt_crcf_execute(f_obj_env, hilb[i], &tmp[i]);
 		env[i] = cabsf(tmp[i]);
-
+		if (i < 100)
+			printf("%d: %lf\n", i, env[i]);
 	}
 
 
@@ -413,9 +416,10 @@ float * get_envelope(float samp_freq, float *filtered_wav,
 
 
 float * apply_polyfit(float samp_freq, int resamp_frames, float *env) {
-	int i, j, seg_size, step_size, num_segs, poly_coeff = 2;
+	int i, j, seg_size, step_size, num_segs, poly_coeff = 2, dump = 0;
 	float *poly_param, **poly_res, *poly_seg, max_poly_res, min_poly_res;
-	float *poly, *log_env = calloc(resamp_frames, sizeof(float));
+	float *store, *var;
+	float *log_env = calloc(resamp_frames, sizeof(float));
 	//FIXME: add calloc NULL check
 
 	for (i = 0; i < resamp_frames; i++)
@@ -431,7 +435,8 @@ float * apply_polyfit(float samp_freq, int resamp_frames, float *env) {
 	poly_param = calloc(seg_size, sizeof(float));
 	poly_res = calloc(num_segs, sizeof(float *));
 	poly_seg = calloc(seg_size, sizeof(float));
-	poly = calloc(poly_coeff, sizeof(float));
+	store = calloc(num_segs, sizeof(float));
+	var = calloc(num_segs, sizeof(float));
 
 	for (i = 0; i < num_segs; i++) 
 		poly_res[i] = calloc(poly_coeff, sizeof(float));
@@ -452,10 +457,30 @@ float * apply_polyfit(float samp_freq, int resamp_frames, float *env) {
 
 		//TODO: CHECK MATLAB POLYFIT COEFFS
 		//TODO: CHECK MATLAB VALUES UP TO HERE
-		for (j = 0; j < poly_coeff; j++)
-			printf("%lf\n", poly_res[i][j]);
+//		for (j = 0; j < poly_coeff; j++) {
+//			printf("%lf", poly_res[i][j]);
+//			if (j == 0)
+//				printf(",");
+//			else
+//				printf("\n");
+//		}
+
+		store[i] = 6.91 / (resamp_frames * 
+			logf(powf(10.0, -poly_res[i][0])));
+
+		for (j = 0; j < poly_coeff; j++) {
+			//FIXME eeeh floating point comparisons are DODGEY in C
+			if (poly_res[i][j] < min_poly_res || 
+				poly_res[i][j] > max_poly_res) {
+				store[i] = 0;
+				var[i] = FLT_MAX;
+				dump++;
+			}
+		}
 	}
 
+	/* Choose segments */
+	choose_segments(var, step_size, num_segs, num_segs - dump);
 
 	/* Free 2d arrays */
 	for (i = 0; i < num_segs; i++) 
@@ -463,7 +488,41 @@ float * apply_polyfit(float samp_freq, int resamp_frames, float *env) {
 	
 	free(poly_seg);
 	free(poly_res);
+	free(store);
+	free(var);
+	free(poly_param);
+	free(log_env);
 	return NULL;
+}
+
+int ** choose_segments(float *var, int step_size, int len, int not_dumped) {
+	int i, k = 1, j = 0;
+	int **seg_index;
+
+	seg_index = calloc(not_dumped, sizeof(int *));
+
+	for (i = 0; i < not_dumped; i++) 
+		seg_index[i] = calloc(2, sizeof(int));
+
+	/* Set decay segments and number of continuous segments in array */
+	j = 1;
+	for (i = 0; i < len; i += k) {
+		k = 1;
+		if (var[i] < FLT_MAX) {
+			seg_index[j][0] = i;
+			seg_index[j][1] = 0;
+
+			while (((i + k) < len) && var[i + k] < FLT_MAX) {
+				seg_index[j][2]++;
+				k++;
+			}
+			j++;
+			k += step_size;
+		}
+	}
+
+	/* FIXME: don't free seg_index... what am I supposed to do about it? */
+	return seg_index;
 }
 
 /* Function uses Gnuplot to plot the wav envelope */
