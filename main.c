@@ -30,8 +30,9 @@
 #define LOW_PASS_CUTOFF	80
 #define DAMP_SEG_SIZE	0.5
 #define DAMP_STEP_SIZE	0.002
-#define MAX_RT		100	
+#define MAX_RT		100.0	
 #define MIN_RT		0.005	
+#define	BEST_S_NUM	100000
 
 /* Functions */
 int get_wav_data(void);
@@ -42,8 +43,11 @@ float * oct_filt_data(float *output_data, float band, float samp_freq,
 	int resamp_frames);
 float * get_envelope(float samp_freq, float *resampled_wav, 
 	int resamp_frames);
-float * apply_polyfit(float samp_freq, int resamp_frames, float *env);
-int ** choose_segments(float *var, int step_size, int len, int not_dumped);
+int ** apply_polyfit(float samp_freq, int resamp_frames, float *env, 
+	int *s_e_size);
+int ** choose_segments(float *var, int step_size, int len, int not_dumped,
+	int *seg_num_els);
+int * perform_ml(void);
 int plot_wav(float *wav_data, int channels, sf_count_t frames, int samprate);
 
 /* Globals */
@@ -188,7 +192,7 @@ int get_wav_data(void) {
 
 
 int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
-	int i, ret, resamp_frames = 0;
+	int i, ret, s_e_size, resamp_frames = 0, **start_end;
 	float *resampled_wav, *filtered_wav, *env;
 
 	printf("DEBUG: resample init\n");
@@ -238,9 +242,11 @@ int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
 		env = get_envelope((float) samp_freq_per_band[i], filtered_wav, 
 			resamp_frames);
 
-		/* Polyfit algorithm */
-		apply_polyfit((float) samp_freq_per_band[i], resamp_frames, 
-			env);
+		/* Polyfit algorithm & get decay segments */
+		start_end = apply_polyfit((float) samp_freq_per_band[i], 
+			resamp_frames, env, &s_e_size);
+
+		perform_ml();
 	}
 	return 0;
 }
@@ -396,8 +402,8 @@ float * get_envelope(float samp_freq, float *filtered_wav,
 		/* Apply low pass filter to envelope */
 		iirfilt_crcf_execute(f_obj_env, hilb[i], &tmp[i]);
 		env[i] = cabsf(tmp[i]);
-		if (i < 100)
-			printf("%d: %lf\n", i, env[i]);
+//		if (i < 100)
+//			printf("%d: %lf\n", i, env[i]);
 	}
 
 
@@ -415,8 +421,10 @@ float * get_envelope(float samp_freq, float *filtered_wav,
 }
 
 
-float * apply_polyfit(float samp_freq, int resamp_frames, float *env) {
+int ** apply_polyfit(float samp_freq, int resamp_frames, float *env, int *s_e_size) {
 	int i, j, seg_size, step_size, num_segs, poly_coeff = 2, dump = 0;
+	int **seg_index, invalid_coeff = 0, actual_seg_num_els = 0, max = 0;
+	int **start_end; 
 	float *poly_param, **poly_res, *poly_seg, max_poly_res, min_poly_res;
 	float *store, *var;
 	float *log_env = calloc(resamp_frames, sizeof(float));
@@ -457,6 +465,7 @@ float * apply_polyfit(float samp_freq, int resamp_frames, float *env) {
 
 		//TODO: CHECK MATLAB POLYFIT COEFFS
 		//TODO: CHECK MATLAB VALUES UP TO HERE
+		//DONE ABOVE - SEEMED FINE BUT POLY COEFFS REVERESED...
 //		for (j = 0; j < poly_coeff; j++) {
 //			printf("%lf", poly_res[i][j]);
 //			if (j == 0)
@@ -472,15 +481,44 @@ float * apply_polyfit(float samp_freq, int resamp_frames, float *env) {
 			//FIXME eeeh floating point comparisons are DODGEY in C
 			if (poly_res[i][j] < min_poly_res || 
 				poly_res[i][j] > max_poly_res) {
-				store[i] = 0;
-				var[i] = FLT_MAX;
-				dump++;
+				invalid_coeff++;
 			}
 		}
+		if (invalid_coeff  == poly_coeff) {
+			store[i] = 0.0;
+			var[i] = -1.0;
+			dump++;
+		}
+		invalid_coeff = 0;		
 	}
 
 	/* Choose segments */
-	choose_segments(var, step_size, num_segs, num_segs - dump);
+	seg_index = choose_segments(var, step_size, num_segs, num_segs - dump,
+		&actual_seg_num_els);
+
+	/* Number of decay segments should not be greater than BEST_S_NUM */
+	if (actual_seg_num_els > BEST_S_NUM)
+		actual_seg_num_els = BEST_S_NUM;
+
+	start_end = calloc(2, sizeof(int *));
+	for (i = 0; i < 2; i++)
+		start_end[i] = calloc(actual_seg_num_els, sizeof(int));
+
+	for (i = 0; i < actual_seg_num_els; i++) {
+		max = seg_index[0][1];
+		for (j = 0; j < actual_seg_num_els; j++) {
+			if (seg_index[j][1] > seg_index[max][1])
+				max = j;
+		}
+
+		start_end[0][i] = (seg_index[max][0] - 1) * step_size + 1;
+		start_end[1][i] = (seg_index[max][0] - 1) * step_size + 
+			seg_size + seg_index[max][1] * step_size;
+
+		/* Remove longest segment - it has been chosen */
+		seg_index[max][1] = 0;
+		
+	}
 
 	/* Free 2d arrays */
 	for (i = 0; i < num_segs; i++) 
@@ -492,28 +530,34 @@ float * apply_polyfit(float samp_freq, int resamp_frames, float *env) {
 	free(var);
 	free(poly_param);
 	free(log_env);
-	return NULL;
+
+	*s_e_size = actual_seg_num_els;
+
+	return start_end;
 }
 
-int ** choose_segments(float *var, int step_size, int len, int not_dumped) {
-	int i, k = 1, j = 0;
+int ** choose_segments(float *var, int step_size, int len, int not_dumped, 
+		int *seg_num_els) {
+	int i, k, j = 0;
 	int **seg_index;
 
+	/* Max possible size of seg_index */
 	seg_index = calloc(not_dumped, sizeof(int *));
 
 	for (i = 0; i < not_dumped; i++) 
 		seg_index[i] = calloc(2, sizeof(int));
 
 	/* Set decay segments and number of continuous segments in array */
-	j = 1;
-	for (i = 0; i < len; i += k) {
+	for (i = 0; i < len - 1; i += k) {
 		k = 1;
-		if (var[i] < FLT_MAX) {
+
+		/* Floating point method of checking if var[i] == 0 */
+		if (fabs(var[i]) < 0.0001) {
 			seg_index[j][0] = i;
 			seg_index[j][1] = 0;
 
-			while (((i + k) < len) && var[i + k] < FLT_MAX) {
-				seg_index[j][2]++;
+			while (((i + k) < len) && fabs(var[i + k]) < 0.0001) {
+				seg_index[j][1]++;
 				k++;
 			}
 			j++;
@@ -521,8 +565,15 @@ int ** choose_segments(float *var, int step_size, int len, int not_dumped) {
 		}
 	}
 
+	*seg_num_els = j;
 	/* FIXME: don't free seg_index... what am I supposed to do about it? */
 	return seg_index;
+}
+
+int * perform_ml() {
+	
+
+	return NULL;
 }
 
 /* Function uses Gnuplot to plot the wav envelope */
