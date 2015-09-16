@@ -246,6 +246,9 @@ int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
 		start_end = apply_polyfit((float) samp_freq_per_band[i], 
 			resamp_frames, env, &s_e_size);
 
+		for (ret = 0; ret < 100; ret++)
+			printf("%d: %d %d\n", ret, start_end[0][ret], start_end[1][ret]);
+
 		perform_ml();
 	}
 	return 0;
@@ -505,14 +508,14 @@ int ** apply_polyfit(float samp_freq, int resamp_frames, float *env, int *s_e_si
 		start_end[i] = calloc(actual_seg_num_els, sizeof(int));
 
 	for (i = 0; i < actual_seg_num_els; i++) {
-		max = seg_index[0][1];
+		max = 0;
 		for (j = 0; j < actual_seg_num_els; j++) {
 			if (seg_index[j][1] > seg_index[max][1])
 				max = j;
 		}
 
-		start_end[0][i] = (seg_index[max][0] - 1) * step_size + 1;
-		start_end[1][i] = (seg_index[max][0] - 1) * step_size + 
+		start_end[0][i] = seg_index[max][0] * step_size + 1;
+		start_end[1][i] = seg_index[max][0] * step_size + 
 			seg_size + seg_index[max][1] * step_size;
 
 		/* Remove longest segment - it has been chosen */
