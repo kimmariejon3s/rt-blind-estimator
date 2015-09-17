@@ -47,7 +47,8 @@ int ** apply_polyfit(float samp_freq, int resamp_frames, float *env,
 	int *s_e_size);
 int ** choose_segments(float *var, int step_size, int len, int not_dumped,
 	int *seg_num_els);
-int * perform_ml(void);
+int * perform_ml(int **start_end, float *env, int s_e_size, 
+	float *filtered_wav, int resamp_frames, int samp_freq);
 int plot_wav(float *wav_data, int channels, sf_count_t frames, int samprate);
 
 /* Globals */
@@ -249,7 +250,8 @@ int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
 		for (ret = 0; ret < 100; ret++)
 			printf("%d: %d %d\n", ret, start_end[0][ret], start_end[1][ret]);
 
-		perform_ml();
+		perform_ml(start_end, env, s_e_size, filtered_wav, 
+			resamp_frames, samp_freq_per_band[i]);
 	}
 	return 0;
 }
@@ -573,9 +575,95 @@ int ** choose_segments(float *var, int step_size, int len, int not_dumped,
 	return seg_index;
 }
 
-int * perform_ml() {
-	
+int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav, int resamp_frames, int samp_freq) {
+	int sz, i, j, k, len, min_abs_filt_seg, max_abs_filt_seg, max2;
+	float *segment, *env_seg, *abs_filt_seg, *seg_segment, *seg_seg2;
+	float *abs_filtered = calloc(resamp_frames, sizeof(float));
+	int *store_start = calloc(s_e_size, sizeof(int)); 
+	int *store_end = calloc(s_e_size, sizeof(int));
 
+	/* Get absolute vaule of filtered wav */
+	for (i = 0; i < resamp_frames; i++)
+		abs_filtered[i] = fabs(filtered_wav[i]);		
+
+	/* Largest possible size of arrays */
+	sz = abs(start_end[0][0] - start_end[1][0]);
+	segment = calloc(sz, sizeof(float));
+	env_seg = calloc(sz, sizeof(float));
+	abs_filt_seg = calloc(sz, sizeof(float));
+	seg_segment = calloc(sz, sizeof(float));
+	seg_seg2 = calloc(sz, sizeof(float));
+
+	for (i = 0; i < s_e_size; i++) {
+		len = abs(start_end[0][i] - start_end[1][i]);
+
+		for (j = start_end[0][i] - 1; j < start_end[1][i] - 1; j++) {
+			segment[j] = filtered_wav[j];
+			env_seg[j] = env[j];
+			abs_filt_seg[j] = abs_filtered[j];
+		}
+
+		min_abs_filt_seg = len - (DAMP_SEG_SIZE / 2) * samp_freq - 1;
+		for (j = len - (DAMP_SEG_SIZE / 2) * samp_freq - 1; j < len; 
+			j++) {
+			if (abs_filt_seg[j] < abs_filt_seg[min_abs_filt_seg])
+				min_abs_filt_seg = j;
+		}
+
+		for (j = 0; j < min_abs_filt_seg; j++)
+			seg_segment[j] = segment[j];
+
+		//FIXME should be -1 or -2? Matlab had -1
+		//TODO print out min_abs_filt_seg and max_abs_filt_seg in MTLB
+		min_abs_filt_seg += len - (DAMP_SEG_SIZE / 2) * samp_freq - 2;
+
+		max_abs_filt_seg = 0;
+		for (j = 0; j < roundf((DAMP_SEG_SIZE / 2) * resamp_frames); 
+			j++) {
+			if (abs_filt_seg[j] > abs_filt_seg[max_abs_filt_seg])
+				max_abs_filt_seg = j;
+		}
+
+		for (k = 0, j = max_abs_filt_seg - 1; j < min_abs_filt_seg; 
+			k++, j++)
+			seg_seg2[k] = seg_segment[j];
+
+		max2 = k + 1;
+
+		k = abs(seg_seg2[0]);
+		for (j = 0; j < max2; j++) {
+			seg_seg2[j] = abs(seg_seg2[j]);
+			if (seg_seg2[j] > seg_seg2[k])
+				k = j; 
+		}
+			
+		for (j= 0; j < max2; j++)
+			seg_seg2[j] /= k;
+
+		//FIXME should be -1 or -2? Matlab had -1
+		/* Save fine-tuned start and end locations */
+		store_start[i] = start_end[0][i] + max_abs_filt_seg - 2;
+		store_end[i] = start_end[0][i] + max_abs_filt_seg + max2 - 3;
+	
+		//MLE_3
+		//NOW is a good time to do the mtlb check	
+
+		/* Reset to zero b/c arrays are longer than they need to be */
+		memset(segment, 0, sz * sizeof(float));
+		memset(seg_segment, 0, sz * sizeof(float));
+		memset(seg_seg2, 0, sz * sizeof(float));
+		memset(env_seg, 0, sz * sizeof(float));
+		memset(abs_filt_seg, 0, sz * sizeof(float));
+	}
+
+	free(segment);
+	free(seg_segment);
+	free(seg_seg2);
+	free(env_seg);
+	free(abs_filt_seg);
+	free(abs_filtered);
+	free(store_start);
+	free(store_end);
 	return NULL;
 }
 
