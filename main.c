@@ -33,6 +33,9 @@
 #define MAX_RT		100.0	
 #define MIN_RT		0.005	
 #define	BEST_S_NUM	100000
+#define PAR_UP_BOUND	0.9999
+#define PAR_LOW_BOUND	0.99
+#define SQP_STEP	5
 
 /* Functions */
 int get_wav_data(void);
@@ -49,6 +52,9 @@ int ** choose_segments(float *var, int step_size, int len, int not_dumped,
 	int *seg_num_els);
 int * perform_ml(int **start_end, float *env, int s_e_size, 
 	float *filtered_wav, int resamp_frames, int samp_freq);
+int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg);
+float alpha_opt(float alpha, float *data_seg, int len, float a_val, 
+	float b_val);
 int plot_wav(float *wav_data, int channels, sf_count_t frames, int samprate);
 
 /* Globals */
@@ -247,9 +253,7 @@ int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
 		start_end = apply_polyfit((float) samp_freq_per_band[i], 
 			resamp_frames, env, &s_e_size);
 
-		for (ret = 0; ret < 100; ret++)
-			printf("%d: %d %d\n", ret, start_end[0][ret], start_end[1][ret]);
-
+		/* Preform Maximum Liklihood Estimation */
 		perform_ml(start_end, env, s_e_size, filtered_wav, 
 			resamp_frames, samp_freq_per_band[i]);
 	}
@@ -516,9 +520,9 @@ int ** apply_polyfit(float samp_freq, int resamp_frames, float *env, int *s_e_si
 				max = j;
 		}
 
-		start_end[0][i] = seg_index[max][0] * step_size + 1;
+		start_end[0][i] = seg_index[max][0] * step_size;
 		start_end[1][i] = seg_index[max][0] * step_size + 
-			seg_size + seg_index[max][1] * step_size;
+			seg_size + seg_index[max][1] * step_size - 1;
 
 		/* Remove longest segment - it has been chosen */
 		seg_index[max][1] = 0;
@@ -577,7 +581,7 @@ int ** choose_segments(float *var, int step_size, int len, int not_dumped,
 
 int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav, int resamp_frames, int samp_freq) {
 	int sz, i, j, k, len, min_abs_filt_seg, max_abs_filt_seg, max2;
-	float *segment, *env_seg, *abs_filt_seg, *seg_segment, *seg_seg2;
+	float *segment, *env_seg, *abs_filt_seg, *seg_seg2;
 	float *abs_filtered = calloc(resamp_frames, sizeof(float));
 	int *store_start = calloc(s_e_size, sizeof(int)); 
 	int *store_end = calloc(s_e_size, sizeof(int));
@@ -586,78 +590,73 @@ int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 	for (i = 0; i < resamp_frames; i++)
 		abs_filtered[i] = fabs(filtered_wav[i]);		
 
-	/* Largest possible size of arrays */
-	sz = abs(start_end[0][0] - start_end[1][0]);
+	/* Largest possible size of arrays - first pair of elements */
+	sz = start_end[1][0] - start_end[0][0];
 	segment = calloc(sz, sizeof(float));
 	env_seg = calloc(sz, sizeof(float));
 	abs_filt_seg = calloc(sz, sizeof(float));
-	seg_segment = calloc(sz, sizeof(float));
-	seg_seg2 = calloc(sz, sizeof(float));
+	seg_seg2 = calloc(sz + sz - roundf((DAMP_SEG_SIZE / 2) * samp_freq), 
+		sizeof(float));
 
 	for (i = 0; i < s_e_size; i++) {
-		len = abs(start_end[0][i] - start_end[1][i]);
+		len = start_end[1][i] - start_end[0][i];
 
-		for (j = start_end[0][i] - 1; j < start_end[1][i] - 1; j++) {
-			segment[j] = filtered_wav[j];
-			env_seg[j] = env[j];
-			abs_filt_seg[j] = abs_filtered[j];
+		/* Store decay segment in new array */
+		for (k = 0, j = start_end[0][i]; j < start_end[1][i]; j++, k++)
+		{
+			segment[k] = filtered_wav[j];
+			env_seg[k] = env[j];
+			abs_filt_seg[k] = abs_filtered[j];
 		}
 
-		min_abs_filt_seg = len - (DAMP_SEG_SIZE / 2) * samp_freq - 1;
-		for (j = len - (DAMP_SEG_SIZE / 2) * samp_freq - 1; j < len; 
-			j++) {
+		/* Get location of minimum */
+		min_abs_filt_seg = len - roundf((DAMP_SEG_SIZE / 2) * 
+			samp_freq) - 1;
+		for (j = min_abs_filt_seg; j < len; j++) {
 			if (abs_filt_seg[j] < abs_filt_seg[min_abs_filt_seg])
 				min_abs_filt_seg = j;
 		}
 
-		for (j = 0; j < min_abs_filt_seg; j++)
-			seg_segment[j] = segment[j];
-
-		//FIXME should be -1 or -2? Matlab had -1
-		//TODO print out min_abs_filt_seg and max_abs_filt_seg in MTLB
-		min_abs_filt_seg += len - (DAMP_SEG_SIZE / 2) * samp_freq - 2;
-
+		/* Get location of maximum */
 		max_abs_filt_seg = 0;
-		for (j = 0; j < roundf((DAMP_SEG_SIZE / 2) * resamp_frames); 
-			j++) {
+		for (j = 0; j < roundf((DAMP_SEG_SIZE / 2) * samp_freq); j++) {
 			if (abs_filt_seg[j] > abs_filt_seg[max_abs_filt_seg])
 				max_abs_filt_seg = j;
 		}
 
-		for (k = 0, j = max_abs_filt_seg - 1; j < min_abs_filt_seg; 
-			k++, j++)
-			seg_seg2[k] = seg_segment[j];
+		/* Store new fine-tuned decay segment */
+		for (k = 0, j = max_abs_filt_seg; j <= min_abs_filt_seg; k++, 
+			j++) {
+			seg_seg2[k] = segment[j];
+		}
 
-		max2 = k + 1;
+		max2 = k;
 
-		k = abs(seg_seg2[0]);
-		for (j = 0; j < max2; j++) {
-			seg_seg2[j] = abs(seg_seg2[j]);
-			if (seg_seg2[j] > seg_seg2[k])
+		k = 0;
+		for (j = 0; j <= max2; j++) {
+			if (fabs(seg_seg2[j]) > fabs(seg_seg2[k]))
 				k = j; 
 		}
 			
-		for (j= 0; j < max2; j++)
-			seg_seg2[j] /= k;
+		for (j= 0; j <= max2; j++)
+			seg_seg2[j] /= fabs(seg_seg2[k]);
 
-		//FIXME should be -1 or -2? Matlab had -1
 		/* Save fine-tuned start and end locations */
-		store_start[i] = start_end[0][i] + max_abs_filt_seg - 2;
-		store_end[i] = start_end[0][i] + max_abs_filt_seg + max2 - 3;
-	
-		//MLE_3
-		//NOW is a good time to do the mtlb check	
+		store_start[i] = start_end[0][i] + max_abs_filt_seg;
+		store_end[i] = start_end[0][i] + max_abs_filt_seg + max2 - 1;
+
+		/* ML fitting of decay model to the data */
+		ml_fit(seg_seg2, max2, (float) samp_freq, fabs(seg_seg2[k]));
 
 		/* Reset to zero b/c arrays are longer than they need to be */
 		memset(segment, 0, sz * sizeof(float));
-		memset(seg_segment, 0, sz * sizeof(float));
-		memset(seg_seg2, 0, sz * sizeof(float));
+		memset(seg_seg2, 0, (sz + sz - roundf((DAMP_SEG_SIZE / 2) * 
+			samp_freq)) * sizeof(float));
 		memset(env_seg, 0, sz * sizeof(float));
 		memset(abs_filt_seg, 0, sz * sizeof(float));
 	}
 
 	free(segment);
-	free(seg_segment);
 	free(seg_seg2);
 	free(env_seg);
 	free(abs_filt_seg);
@@ -665,6 +664,86 @@ int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 	free(store_start);
 	free(store_end);
 	return NULL;
+}
+
+int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
+	float min, max, interval, j, alpha, *coarse_grid;
+	int i, k;
+
+	min = -6.91 / logf(PAR_LOW_BOUND) / 3000.0;
+	min = exp(-6.91 / (samp_freq * min));
+
+	max = -6.91 / logf(PAR_UP_BOUND) / 3000.0;	
+	max = exp(-6.91 / (samp_freq * max));
+
+	interval = (max - min) / ((float) SQP_STEP - 1.0);
+	coarse_grid = calloc(max / interval, sizeof(float));
+
+	/* Fill in coarse grid */
+	for (i = 0, j = 0; i < max / interval; i++, j += interval)
+		coarse_grid[i] = j;
+
+	//FIXME: There is another max(abs(x)) division here in MTLB - typo?
+	for (i = 0; i < len; i++)
+		data_seg[i] /= max_abs_seg;
+
+	for (i = 0; i < SQP_STEP; i++) {
+		for (k = 0; k < SQP_STEP; k++) {
+			alpha = 0.5;
+
+			alpha_opt(alpha, data_seg, len, coarse_grid[k], 
+				coarse_grid[i]);		
+		}
+	}
+
+
+	free(coarse_grid);
+	return 0;
+}
+
+
+/* Optimise with respect to alpha */
+float alpha_opt(float alpha, float *data_seg, int len, float a_val, float b_val)
+{
+	int i;
+	float sigma_tot = 0, *sigma = calloc(len, sizeof(float));
+	float like_a_tot = 0;
+	float like_b_tot = 0, *like_b = calloc(len, sizeof(float));
+
+	for (i = 0; i < len; i++) {
+		/* Get sigma */
+		sigma[i] = alpha * powf(a_val, i) + 
+			(1.0 - alpha) * powf(b_val, i);
+
+		sigma[i] = -1.0 / powf(sigma[i], 2);
+
+		sigma[i] *= powf(data_seg[i], 2);
+
+		sigma_tot += sigma[i];
+
+		/* Get likelihood*/
+		like_a_tot += logf( alpha * powf(a_val, i) + 
+			(1.0 - alpha) * powf(b_val, i) );
+
+		like_b[i] = alpha * powf(a_val, i) + 
+			(1.0 - alpha) * powf(b_val, i);
+
+		like_b[i] = powf(like_b[i], -2);
+
+		like_b[i] *= powf(data_seg[i], 2) / (2.0 * powf(sigma_tot, 2));
+
+		like_b_tot += like_b[i];	
+	}
+
+	sigma_tot = sqrtf(-sigma_tot / ( (float) len ));
+
+	like_b_tot = -like_a_tot - like_b_tot - 
+		(float) len * logf(2 * M_PI * powf(sigma_tot, 2)) / 2.0;
+
+	free(like_b);
+	free(sigma);
+
+	return -like_b_tot;
 }
 
 /* Function uses Gnuplot to plot the wav envelope */
