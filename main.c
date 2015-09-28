@@ -13,6 +13,7 @@
 #include <libavutil/channel_layout.h>
 #include <libavcodec/avcodec.h>
 #include <liquid/liquid.h>
+#include <nlopt.h>
 #include "kiss_fft.h"
 
 #define MAX_CHUNK_SIZE	1024 * 1024 * 1024
@@ -668,6 +669,7 @@ int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 
 int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
 	float min, max, interval, j, alpha, *coarse_grid;
+	nlopt_opt nl_obj1 = nlopt_create(NLOPT_LD_SLSQP, 3);
 	int i, k;
 
 	min = -6.91 / logf(PAR_LOW_BOUND) / 3000.0;
