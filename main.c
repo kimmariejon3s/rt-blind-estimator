@@ -54,9 +54,17 @@ int ** choose_segments(float *var, int step_size, int len, int not_dumped,
 int * perform_ml(int **start_end, float *env, int s_e_size, 
 	float *filtered_wav, int resamp_frames, int samp_freq);
 int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg);
-float alpha_opt(float alpha, float *data_seg, int len, float a_val, 
-	float b_val);
+double alpha_opt(int n, const double *a, double *grad, void *nldv);
 int plot_wav(float *wav_data, int channels, sf_count_t frames, int samprate);
+
+/* Structs */
+struct nl_extra_data {
+	float *data_seg;
+	int len;
+	double a_val;
+	double b_val;
+};
+
 
 /* Globals */
 int num_bands = 8;
@@ -581,7 +589,7 @@ int ** choose_segments(float *var, int step_size, int len, int not_dumped,
 }
 
 int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav, int resamp_frames, int samp_freq) {
-	int sz, i, j, k, len, min_abs_filt_seg, max_abs_filt_seg, max2;
+	int sz, i, j, k, len, min_abs_filt_seg, max_abs_filt_seg, max2, ret = 0;
 	float *segment, *env_seg, *abs_filt_seg, *seg_seg2;
 	float *abs_filtered = calloc(resamp_frames, sizeof(float));
 	int *store_start = calloc(s_e_size, sizeof(int)); 
@@ -647,7 +655,11 @@ int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 		store_end[i] = start_end[0][i] + max_abs_filt_seg + max2 - 1;
 
 		/* ML fitting of decay model to the data */
-		ml_fit(seg_seg2, max2, (float) samp_freq, fabs(seg_seg2[k]));
+		ret = ml_fit(seg_seg2, max2, (float) samp_freq, 
+			fabs(seg_seg2[k]));
+
+		/* FIXME: use ret to check for error */
+		/* FIXME: fix all error cases - clean exit and all that */
 
 		/* Reset to zero b/c arrays are longer than they need to be */
 		memset(segment, 0, sz * sizeof(float));
@@ -668,9 +680,22 @@ int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 }
 
 int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
-	float min, max, interval, j, alpha, *coarse_grid;
-	nlopt_opt nl_obj1 = nlopt_create(NLOPT_LD_SLSQP, 3);
-	int i, k;
+	float min, max, interval, j;
+	double *coarse_grid, lb = 0.0, ub = 1.0;
+	double like[SQP_STEP][SQP_STEP] = {0}, alpha[SQP_STEP][SQP_STEP] = {0};
+	int i, k, n = 1, ret = 0;
+	struct nl_extra_data nld;
+
+	nld.data_seg = data_seg;
+	nld.len = len;
+
+	nlopt_opt nl_obj1 = nlopt_create(NLOPT_LN_COBYLA, n);
+	nlopt_set_lower_bounds1(nl_obj1, lb);
+	nlopt_set_upper_bounds1(nl_obj1, ub);
+	nlopt_set_xtol_rel(nl_obj1, 1e-4);
+	//nlopt_set_maxeval(nl_obj1, 300);
+	nlopt_set_min_objective(nl_obj1, (nlopt_func) alpha_opt, (void *) &nld);
+
 
 	min = -6.91 / logf(PAR_LOW_BOUND) / 3000.0;
 	min = exp(-6.91 / (samp_freq * min));
@@ -679,7 +704,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
 	max = exp(-6.91 / (samp_freq * max));
 
 	interval = (max - min) / ((float) SQP_STEP - 1.0);
-	coarse_grid = calloc(max / interval, sizeof(float));
+	coarse_grid = calloc(max / interval, sizeof(double));
 
 	/* Fill in coarse grid */
 	for (i = 0, j = 0; i < max / interval; i++, j += interval)
@@ -690,62 +715,77 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
 		data_seg[i] /= max_abs_seg;
 
 	for (i = 0; i < SQP_STEP; i++) {
+		nld.b_val = coarse_grid[i];
+ 
 		for (k = 0; k < SQP_STEP; k++) {
-			alpha = 0.5;
+			alpha[k][i] = 0.5;
+			nld.a_val = coarse_grid[k];
 
-			alpha_opt(alpha, data_seg, len, coarse_grid[k], 
-				coarse_grid[i]);		
+			ret |= nlopt_optimize(nl_obj1, &alpha[k][i], 
+				&like[k][i]);
+
+			if (i < 1 && k < 1)
+				printf("k: %d, i: %d, ret: %d, a: %lf like: %lf\n"
+					, k, i, ret, alpha[k][i], like[k][i]);
 		}
 	}
 
-
+	nlopt_destroy(nl_obj1);
 	free(coarse_grid);
-	return 0;
+
+	if (ret != 0)
+		return -1;
+	else
+		return 0;
 }
 
 
 /* Optimise with respect to alpha */
-float alpha_opt(float alpha, float *data_seg, int len, float a_val, float b_val)
+double alpha_opt(int n, const double *a, double *grad, void *nldv)
 {
+	/* FIXME ADD THE STUFF IN HERE TO DO WITH READING nld */
 	int i;
-	float sigma_tot = 0, *sigma = calloc(len, sizeof(float));
+	float alpha = (float) *a;
+	struct nl_extra_data *nld = (struct nl_extra_data *) nldv;	
+	float sigma_tot = 0, *sigma = calloc(nld->len, sizeof(float));
 	float like_a_tot = 0;
-	float like_b_tot = 0, *like_b = calloc(len, sizeof(float));
+	float like_b_tot = 0, *like_b = calloc(nld->len, sizeof(float));
 
-	for (i = 0; i < len; i++) {
+	for (i = 0; i < nld->len; i++) {
 		/* Get sigma */
-		sigma[i] = alpha * powf(a_val, i) + 
-			(1.0 - alpha) * powf(b_val, i);
+		sigma[i] = alpha * powf(nld->a_val, i) + 
+			(1.0 - alpha) * powf(nld->b_val, i);
 
 		sigma[i] = -1.0 / powf(sigma[i], 2);
 
-		sigma[i] *= powf(data_seg[i], 2);
+		sigma[i] *= powf(nld->data_seg[i], 2);
 
 		sigma_tot += sigma[i];
 
 		/* Get likelihood*/
-		like_a_tot += logf( alpha * powf(a_val, i) + 
-			(1.0 - alpha) * powf(b_val, i) );
+		like_a_tot += logf( alpha * powf(nld->a_val, i) + 
+			(1.0 - alpha) * powf(nld->b_val, i) );
 
-		like_b[i] = alpha * powf(a_val, i) + 
-			(1.0 - alpha) * powf(b_val, i);
+		like_b[i] = alpha * powf(nld->a_val, i) + 
+			(1.0 - alpha) * powf(nld->b_val, i);
 
 		like_b[i] = powf(like_b[i], -2);
 
-		like_b[i] *= powf(data_seg[i], 2) / (2.0 * powf(sigma_tot, 2));
+		like_b[i] *= powf(nld->data_seg[i], 2) / 
+			(2.0 * powf(sigma_tot, 2));
 
 		like_b_tot += like_b[i];	
 	}
 
-	sigma_tot = sqrtf(-sigma_tot / ( (float) len ));
+	sigma_tot = sqrtf(-sigma_tot / ( (float) nld->len ));
 
 	like_b_tot = -like_a_tot - like_b_tot - 
-		(float) len * logf(2 * M_PI * powf(sigma_tot, 2)) / 2.0;
+		(float) nld->len * logf(2 * M_PI * powf(sigma_tot, 2)) / 2.0;
 
 	free(like_b);
 	free(sigma);
 
-	return -like_b_tot;
+	return (double) -like_b_tot;
 }
 
 /* Function uses Gnuplot to plot the wav envelope */
