@@ -745,47 +745,51 @@ double alpha_opt(int n, const double *a, double *grad, void *nldv)
 {
 	/* FIXME ADD THE STUFF IN HERE TO DO WITH READING nld */
 	int i;
-	float alpha = (float) *a;
+	double alpha = *a;
 	struct nl_extra_data *nld = (struct nl_extra_data *) nldv;	
-	float sigma_tot = 0, *sigma = calloc(nld->len, sizeof(float));
-	float like_a_tot = 0;
-	float like_b_tot = 0, *like_b = calloc(nld->len, sizeof(float));
+	double sigma_tot = 0, *sigma = calloc(nld->len, sizeof(double));
+	double like_a_tot = 0;
+	double like_b_tot = 0, *like_b = calloc(nld->len, sizeof(double));
 
 	for (i = 0; i < nld->len; i++) {
 		/* Get sigma */
-		sigma[i] = alpha * powf(nld->a_val, i) + 
-			(1.0 - alpha) * powf(nld->b_val, i);
+		sigma[i] = alpha * pow(nld->a_val, i) + 
+			(1.0 - alpha) * pow(nld->b_val, i);
 
-		sigma[i] = -1.0 / powf(sigma[i], 2);
+		if (alpha - 0.5 < 0.0001 && i < 10)
+			printf("%lf %lf %d %lf\n", alpha, nld->a_val, i, pow(nld->a_val, i));
+		sigma[i] = -1.0 / pow(sigma[i], 2);
 
-		sigma[i] *= powf(nld->data_seg[i], 2);
+		sigma[i] *= pow(nld->data_seg[i], 2);
 
 		sigma_tot += sigma[i];
+	}
 
+	sigma_tot = sqrt(-sigma_tot / ( (double) nld->len ));
+
+	for (i = 0; i < nld->len; i++) {
 		/* Get likelihood*/
-		like_a_tot += logf( alpha * powf(nld->a_val, i) + 
-			(1.0 - alpha) * powf(nld->b_val, i) );
+		like_a_tot += log( alpha * pow(nld->a_val, i) + 
+			(1.0 - alpha) * pow(nld->b_val, i) );
 
-		like_b[i] = alpha * powf(nld->a_val, i) + 
-			(1.0 - alpha) * powf(nld->b_val, i);
+		like_b[i] = alpha * pow(nld->a_val, i) + 
+			(1.0 - alpha) * pow(nld->b_val, i);
 
-		like_b[i] = powf(like_b[i], -2);
+		like_b[i] = pow(like_b[i], -2);
 
-		like_b[i] *= powf(nld->data_seg[i], 2) / 
-			(2.0 * powf(sigma_tot, 2));
+		like_b[i] *= pow(nld->data_seg[i], 2) / 
+			(2.0 * pow(sigma_tot, 2));
 
 		like_b_tot += like_b[i];	
 	}
 
-	sigma_tot = sqrtf(-sigma_tot / ( (float) nld->len ));
-
 	like_b_tot = -like_a_tot - like_b_tot - 
-		(float) nld->len * logf(2 * M_PI * powf(sigma_tot, 2)) / 2.0;
+		(double) nld->len * log(2 * M_PI * pow(sigma_tot, 2)) / 2.0;
 
 	free(like_b);
 	free(sigma);
 
-	return (double) -like_b_tot;
+	return -like_b_tot;
 }
 
 /* Function uses Gnuplot to plot the wav envelope */
