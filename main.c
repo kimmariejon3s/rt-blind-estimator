@@ -34,7 +34,7 @@
 #define MAX_RT		100.0	
 #define MIN_RT		0.005	
 #define	BEST_S_NUM	100000
-#define PAR_UP_BOUND	0.9999
+#define PAR_UP_BOUND	0.99999
 #define PAR_LOW_BOUND	0.99
 #define SQP_STEP	5
 
@@ -680,7 +680,7 @@ int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 }
 
 int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
-	float min, max, interval, j;
+	double min, max, interval, j;
 	double *coarse_grid, lb = 0.0, ub = 1.0;
 	double like[SQP_STEP][SQP_STEP] = {0}, alpha[SQP_STEP][SQP_STEP] = {0};
 	int i, k, n = 1, ret = 0;
@@ -692,22 +692,22 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
 	nlopt_opt nl_obj1 = nlopt_create(NLOPT_LN_COBYLA, n);
 	nlopt_set_lower_bounds1(nl_obj1, lb);
 	nlopt_set_upper_bounds1(nl_obj1, ub);
-	nlopt_set_xtol_rel(nl_obj1, 1e-4);
-	//nlopt_set_maxeval(nl_obj1, 300);
+	//nlopt_set_xtol_rel(nl_obj1, 1e-2);
+	nlopt_set_maxeval(nl_obj1, 300);
 	nlopt_set_min_objective(nl_obj1, (nlopt_func) alpha_opt, (void *) &nld);
 
 
-	min = -6.91 / logf(PAR_LOW_BOUND) / 3000.0;
+	min = (-6.91 / log(PAR_LOW_BOUND)) / 3000.0;
 	min = exp(-6.91 / (samp_freq * min));
 
-	max = -6.91 / logf(PAR_UP_BOUND) / 3000.0;	
+	max = (-6.91 / log(PAR_UP_BOUND)) / 3000.0;	
 	max = exp(-6.91 / (samp_freq * max));
-
+	
 	interval = (max - min) / ((float) SQP_STEP - 1.0);
 	coarse_grid = calloc(max / interval, sizeof(double));
 
 	/* Fill in coarse grid */
-	for (i = 0, j = 0; i < max / interval; i++, j += interval)
+	for (i = 0, j = min; j <= max; i++, j += interval)
 		coarse_grid[i] = j;
 
 	//FIXME: There is another max(abs(x)) division here in MTLB - typo?
@@ -756,8 +756,6 @@ double alpha_opt(int n, const double *a, double *grad, void *nldv)
 		sigma[i] = alpha * pow(nld->a_val, i) + 
 			(1.0 - alpha) * pow(nld->b_val, i);
 
-		if (alpha - 0.5 < 0.0001 && i < 10)
-			printf("%lf %lf %d %lf\n", alpha, nld->a_val, i, pow(nld->a_val, i));
 		sigma[i] = -1.0 / pow(sigma[i], 2);
 
 		sigma[i] *= pow(nld->data_seg[i], 2);
