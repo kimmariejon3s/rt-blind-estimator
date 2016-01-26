@@ -16,6 +16,7 @@
 #include <nlopt.h>
 #include "kiss_fft.h"
 
+#define SPLIT		20
 #define MAX_CHUNK_SIZE	1024 * 1024 * 1024
 #define WINDOW_WIDTH	0.5
 #define OVERLAP		0.98
@@ -590,7 +591,7 @@ int ** choose_segments(float *var, int step_size, int len, int not_dumped,
 
 int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav, int resamp_frames, int samp_freq) {
 	int sz, i, j, k, len, min_abs_filt_seg, max_abs_filt_seg, max2, ret = 0;
-	float *segment, *env_seg, *abs_filt_seg, *seg_seg2;
+	float *segment, *env_seg, *abs_filt_seg, *seg_seg2, max_seg2;
 	float *abs_filtered = calloc(resamp_frames, sizeof(float));
 	int *store_start = calloc(s_e_size, sizeof(int)); 
 	int *store_end = calloc(s_e_size, sizeof(int));
@@ -608,7 +609,7 @@ int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 		sizeof(float));
 
 	for (i = 0; i < s_e_size; i++) {
-		len = start_end[1][i] - start_end[0][i];
+		len = abs(start_end[1][i] - start_end[0][i]);
 
 		/* Store decay segment in new array */
 		for (k = 0, j = start_end[0][i]; j < start_end[1][i]; j++, k++)
@@ -617,15 +618,17 @@ int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 			env_seg[k] = env[j];
 			abs_filt_seg[k] = abs_filtered[j];
 		}
+		// DEBUG: above values match matlab!
 
 		/* Get location of minimum */
 		min_abs_filt_seg = len - roundf((DAMP_SEG_SIZE / 2) * 
 			samp_freq) - 1;
+		
 		for (j = min_abs_filt_seg; j < len; j++) {
 			if (abs_filt_seg[j] < abs_filt_seg[min_abs_filt_seg])
 				min_abs_filt_seg = j;
 		}
-
+		
 		/* Get location of maximum */
 		max_abs_filt_seg = 0;
 		for (j = 0; j < roundf((DAMP_SEG_SIZE / 2) * samp_freq); j++) {
@@ -635,20 +638,20 @@ int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 
 		/* Store new fine-tuned decay segment */
 		for (k = 0, j = max_abs_filt_seg; j <= min_abs_filt_seg; k++, 
-			j++) {
+			j++)
 			seg_seg2[k] = segment[j];
-		}
 
-		max2 = k;
-
+		max2 = k - 1;
+		
 		k = 0;
 		for (j = 0; j <= max2; j++) {
 			if (fabs(seg_seg2[j]) > fabs(seg_seg2[k]))
 				k = j; 
 		}
-			
-		for (j= 0; j <= max2; j++)
-			seg_seg2[j] /= fabs(seg_seg2[k]);
+		
+		max_seg2 = fabs(seg_seg2[k]);	
+		for (j = 0; j <= max2; j++)
+			seg_seg2[j] /= max_seg2;
 
 		/* Save fine-tuned start and end locations */
 		store_start[i] = start_end[0][i] + max_abs_filt_seg;
@@ -711,7 +714,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
 		coarse_grid[i] = j;
 
 	//FIXME: There is another max(abs(x)) division here in MTLB - typo?
-	for (i = 0; i < len; i++)
+	for (i = 0; i < len; i++) 
 		data_seg[i] /= max_abs_seg;
 
 	for (i = 0; i < SQP_STEP; i++) {
