@@ -683,10 +683,10 @@ int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 }
 
 int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
-	double min, max, interval, j;
+	double min, max, interval, j, gmax_val;
 	double *coarse_grid, lb = 0.0, ub = 1.0;
 	double like[SQP_STEP][SQP_STEP] = {0}, alpha[SQP_STEP][SQP_STEP] = {0};
-	int i, k, n = 1, ret = 0;
+	int gmax_pos[2], i, k, n = 1, ret = 0;
 	struct nl_extra_data nld;
 
 	nld.data_seg = data_seg;
@@ -710,13 +710,15 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
 	coarse_grid = calloc(max / interval, sizeof(double));
 
 	/* Fill in coarse grid */
-	for (i = 0, j = min; j <= max; i++, j += interval)
+	for (i = 0, j = min; i < max / interval; i++, j += interval)
 		coarse_grid[i] = j;
 
-	//FIXME: There is another max(abs(x)) division here in MTLB - typo?
+	// There is another max(abs(x)) division here in MATLAB
+	// 	Makes no diff - dividing by 1.0
 	for (i = 0; i < len; i++) 
 		data_seg[i] /= max_abs_seg;
 
+	/* Coarse grid minimisation search */
 	for (i = 0; i < SQP_STEP; i++) {
 		nld.b_val = coarse_grid[i];
  
@@ -727,9 +729,22 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
 			ret |= nlopt_optimize(nl_obj1, &alpha[k][i], 
 				&like[k][i]);
 
-			if (i < 1 && k < 1)
-				printf("k: %d, i: %d, ret: %d, a: %lf like: %lf\n"
-					, k, i, ret, alpha[k][i], like[k][i]);
+			like[k][i] *= -1;
+
+			/* Store value and position ([][]) of global max */
+			if (i == 0 && k == 0) {
+				gmax_val = like[k][i];
+				gmax_pos[0] = k;
+				gmax_pos[1] = i;	
+			} else {
+				if (like[k][i] > gmax_val) {
+					gmax_val = like[k][i];
+					gmax_pos[0] = k;
+					gmax_pos[1] = i;	
+				}
+			}
+
+//			printf("k: %d, i: %d, ret: %d, a: %le like: %le coarse: %le\n", k, i, ret, alpha[k][i], like[k][i], coarse_grid[k]);
 		}
 	}
 
