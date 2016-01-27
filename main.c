@@ -56,6 +56,7 @@ int * perform_ml(int **start_end, float *env, int s_e_size,
 	float *filtered_wav, int resamp_frames, int samp_freq);
 int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg);
 double alpha_opt(int n, const double *a, double *grad, void *nldv);
+double par_3_opt(int n, const double *a, double *grad, void *nldv);
 int plot_wav(float *wav_data, int channels, sf_count_t frames, int samprate);
 
 /* Structs */
@@ -683,19 +684,21 @@ int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 }
 
 int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
-	double min, max, interval, j, gmax_val;
-	double *coarse_grid, lb = 0.0, ub = 1.0;
+	double min, max, interval, j, gmax_val, x_fine[3], fine_val;
+	double *coarse_grid, lb[3], ub[3];
 	double like[SQP_STEP][SQP_STEP] = {0}, alpha[SQP_STEP][SQP_STEP] = {0};
-	int gmax_pos[2], i, k, n = 1, ret = 0;
+	int gmax_pos[2], i, k, el_cg, ret = 0;
 	struct nl_extra_data nld;
+
+	lb[0] = 0.0;
+	ub[0] = 1.0;
 
 	nld.data_seg = data_seg;
 	nld.len = len;
 
-	nlopt_opt nl_obj1 = nlopt_create(NLOPT_LN_COBYLA, n);
-	nlopt_set_lower_bounds1(nl_obj1, lb);
-	nlopt_set_upper_bounds1(nl_obj1, ub);
-	//nlopt_set_xtol_rel(nl_obj1, 1e-2);
+	nlopt_opt nl_obj1 = nlopt_create(NLOPT_LN_COBYLA, 1);
+	nlopt_set_lower_bounds1(nl_obj1, lb[0]);
+	nlopt_set_upper_bounds1(nl_obj1, ub[0]);
 	nlopt_set_maxeval(nl_obj1, 300);
 	nlopt_set_min_objective(nl_obj1, (nlopt_func) alpha_opt, (void *) &nld);
 
@@ -707,10 +710,11 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
 	max = exp(-6.91 / (samp_freq * max));
 	
 	interval = (max - min) / ((float) SQP_STEP - 1.0);
-	coarse_grid = calloc(max / interval, sizeof(double));
+	el_cg = round((max - min) / interval) + 1;
+	coarse_grid = calloc(el_cg, sizeof(double));
 
 	/* Fill in coarse grid */
-	for (i = 0, j = min; i < max / interval; i++, j += interval)
+	for (i = 0, j = min; i < el_cg; i++, j += interval)
 		coarse_grid[i] = j;
 
 	// There is another max(abs(x)) division here in MATLAB
@@ -748,10 +752,33 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
 		}
 	}
 
+	/* No longer need nl_obj1; coarse search is done */
 	nlopt_destroy(nl_obj1);
+
+	/* Create new nlopt object for fine search */
+	nlopt_opt nl_obj3 = nlopt_create(NLOPT_LN_COBYLA, 3);
+
+	lb[0] = lb[1] = coarse_grid[0];
+	ub[0] = ub[1] = coarse_grid[el_cg - 1];
+	lb[2] = 0.0;
+	ub[2] = 1.0;
+
+	nlopt_set_lower_bounds(nl_obj3, lb);
+	nlopt_set_upper_bounds(nl_obj3, ub);
+	nlopt_set_maxeval(nl_obj3, 300);
+	nlopt_set_min_objective(nl_obj3, (nlopt_func) par_3_opt, (void *) &nld);
+
+	/* Initial values for fine search */
+	x_fine[0] = coarse_grid[gmax_pos[0]];
+	x_fine[1] = coarse_grid[gmax_pos[1]];
+	x_fine[2] = alpha[gmax_pos[0]][gmax_pos[1]];	
+
+	ret |= nlopt_optimize(nl_obj3, x_fine, &fine_val);
+	printf("FINE_VAL: %le\n", fine_val);	
+	
 	free(coarse_grid);
 
-	if (ret != 0)
+	if (ret < 0)
 		return -1;
 	else
 		return 0;
@@ -806,6 +833,12 @@ double alpha_opt(int n, const double *a, double *grad, void *nldv)
 	free(sigma);
 
 	return -like_b_tot;
+}
+
+/* Optimise all three parameters */
+double par_3_opt(int n, const double *a, double *grad, void *nldv)
+{
+
 }
 
 /* Function uses Gnuplot to plot the wav envelope */
