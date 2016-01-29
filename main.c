@@ -838,7 +838,32 @@ double alpha_opt(int n, const double *a, double *grad, void *nldv)
 /* Optimise all three parameters */
 double par_3_opt(int n, const double *a, double *grad, void *nldv)
 {
+	int i;
+        struct nl_extra_data *nld = (struct nl_extra_data *) nldv;
+	double a_val = a[0], b_val = a[1], alpha = a[2], sigma_tot = 0;
+	double *env = calloc(nld->len, sizeof(double));
+	double like = 0, x = 0;
+	
 
+	for (i = 0; i < nld->len; i++) {
+		env[i] = alpha * pow(a_val, i) + (1.0 - alpha) * pow(b_val, i);
+
+		sigma_tot -= (-1.0 / pow(env[i], 2)) * pow(nld->data_seg[i], 2);
+	}
+
+	sigma_tot = sqrt(sigma_tot / nld->len);
+
+	for (i = 0; i < nld->len; i++) {
+		like -= log(env[i]);
+
+		x += pow(env[i], -2) * pow(nld->data_seg[i], 2) / 
+			2.0 * pow(sigma_tot, 2);
+	}
+
+	like -= x + nld->len * log(2.0 * M_PI * pow(sigma_tot, 2)) / 2.0;
+
+	free(env);
+	return -like; 
 }
 
 /* Function uses Gnuplot to plot the wav envelope */
