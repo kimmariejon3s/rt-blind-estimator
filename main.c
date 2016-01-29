@@ -42,8 +42,8 @@
 
 /* Functions */
 int get_wav_data(void);
-int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input, 
-	unsigned long long frames);
+int process_wav_data(int band, float *wav_data, SF_INFO input_info, 
+	SNDFILE *input, unsigned long long frames);
 float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, 
 	int samp_freq, const uint8_t **wav_data, int band, int *resamp_frms);
 float * oct_filt_data(float *output_data, float band, float samp_freq, 
@@ -151,7 +151,7 @@ int get_wav_data(void) {
 	SF_INFO input_info;
 	float *wav_data;
 	unsigned long long long_ret = 0;	
-	int i, ret = 0;
+	int band, i, ret = 0;
 
 	/* Open file */
 	input_info.format = 0;
@@ -178,12 +178,15 @@ int get_wav_data(void) {
 		return -1;
 	}
 
-	/* Single channel, so can call this way */
-//	for (i = 0; i <= SPLIT; i++) {
-		long_ret = sf_read_float(input, wav_data, 
-				floor(input_info.frames / SPLIT));
+	/* Octave band filtering */
+	for (band = 0; band < 1; band++) {	
 
-		printf("DEBUG Read: %llu\n", long_ret);
+		/* Single channel, so can call this way */
+	//	for (i = 0; i <= SPLIT; i++) {
+			long_ret = sf_read_float(input, wav_data, 
+					floor(input_info.frames / SPLIT));
+
+			printf("DEBUG Read: %llu\n", long_ret);
 
 
 #if 0
@@ -199,9 +202,11 @@ int get_wav_data(void) {
 	}
 #endif
 
-		/* Process the wav data */
-		ret |= process_wav_data(wav_data, input_info, input, long_ret);
-//	}
+			/* Process the wav data */
+			ret |= process_wav_data(band, wav_data, input_info, 
+				input, long_ret);
+	//	}
+	}
 
 	/* Clean up */	
 	free(wav_data);
@@ -210,9 +215,9 @@ int get_wav_data(void) {
 }
 
 
-int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input,
-		unsigned long long frames) {
-	int i, ret, s_e_size, resamp_frames = 0, **start_end;
+int process_wav_data(int band, float *wav_data, SF_INFO input_info, 
+		SNDFILE *input, unsigned long long frames) {
+	int ret, s_e_size, resamp_frames = 0, **start_end;
 	float *resampled_wav, *filtered_wav, *env;
 
 	printf("DEBUG: resample init\n");
@@ -227,49 +232,46 @@ int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input,
 	av_opt_set_sample_fmt(resamp, "out_sample_fmt", AV_SAMPLE_FMT_FLT, 0);
 
 
-	/* Loop through each octave band */
-	for (i = 0; i < 1; i++) {
-		av_opt_set_int(resamp, "out_sample_rate", 
-			samp_freq_per_band[i], 0); 
+	av_opt_set_int(resamp, "out_sample_rate", 
+		samp_freq_per_band[band], 0); 
 
-		ret = swr_init(resamp);
+	ret = swr_init(resamp);
 
-		if (ret < 0) {
-			printf("Resample initialisation error\nExiting...\n");
-			free(wav_data);
-			sf_close(input);
-			return -1;
-		}
-
-		/* Resample the audio */
-		resampled_wav = resamp_wav_data(resamp, input_info.samplerate, 
-			(uint64_t) frames, samp_freq_per_band[i],
-			(const uint8_t **) &wav_data, octave_bands[i], 
-			&resamp_frames);
-
-		if (resamp_frames <= 0 || resampled_wav == NULL) {
-			free(wav_data);
-			sf_close(input);
-			return -1;
-		}
-
-		/* Octave band filtering */
-		filtered_wav = oct_filt_data(resampled_wav, 
-			(float) octave_bands[i], (float) samp_freq_per_band[i],
-			resamp_frames);
-		
-		/* Obtain signal envelope */
-		env = get_envelope((float) samp_freq_per_band[i], filtered_wav, 
-			resamp_frames);
-
-		/* Polyfit algorithm & get decay segments */
-		start_end = apply_polyfit((float) samp_freq_per_band[i], 
-			resamp_frames, env, &s_e_size);
-
-		/* Perform Maximum Liklihood Estimation */
-		perform_ml(start_end, env, s_e_size, filtered_wav, 
-			resamp_frames, samp_freq_per_band[i]);
+	if (ret < 0) {
+		printf("Resample initialisation error\nExiting...\n");
+		free(wav_data);
+		sf_close(input);
+		return -1;
 	}
+
+	/* Resample the audio */
+	resampled_wav = resamp_wav_data(resamp, input_info.samplerate, 
+		(uint64_t) frames, samp_freq_per_band[band],
+		(const uint8_t **) &wav_data, octave_bands[band], 
+		&resamp_frames);
+
+	if (resamp_frames <= 0 || resampled_wav == NULL) {
+		free(wav_data);
+		sf_close(input);
+		return -1;
+	}
+
+	/* Octave band filtering */
+	filtered_wav = oct_filt_data(resampled_wav, 
+		(float) octave_bands[band], (float) samp_freq_per_band[band],
+		resamp_frames);
+	
+	/* Obtain signal envelope */
+	env = get_envelope((float) samp_freq_per_band[band], filtered_wav, 
+		resamp_frames);
+
+	/* Polyfit algorithm & get decay segments */
+	start_end = apply_polyfit((float) samp_freq_per_band[band], 
+		resamp_frames, env, &s_e_size);
+
+	/* Perform Maximum Liklihood Estimation */
+	perform_ml(start_end, env, s_e_size, filtered_wav, 
+		resamp_frames, samp_freq_per_band[band]);
 	return 0;
 }
 
@@ -808,6 +810,16 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg,
 	nlopt_set_upper_bounds(nl_obj3, ub);
 	nlopt_set_maxeval(nl_obj3, 300);
 	nlopt_set_min_objective(nl_obj3, (nlopt_func) par_3_opt, (void *) &nld);
+
+#if 0
+	// DEBUG TEST W MATLAB VALS
+	x_fine[0] = 0.999878346327187;
+	x_fine[1] = 0.990000000000000;
+	x_fine[2] = 0.751467410761228;
+
+	fine_val = par_3_opt(3, x_fine, NULL, (void *) &nld);	
+	printf("DEBUG: %le\n", fine_val);
+#endif
 
 	/* Initial values for fine search */
 	x_fine[0] = coarse_grid[gmax_pos[0]];
