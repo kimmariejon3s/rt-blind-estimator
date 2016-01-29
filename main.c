@@ -16,7 +16,8 @@
 #include <nlopt.h>
 #include "kiss_fft.h"
 
-#define SPLIT		20
+//FIXME: make this 20 when I decide to do the split stuff
+#define SPLIT		1
 #define MAX_CHUNK_SIZE	1024 * 1024 * 1024
 #define WINDOW_WIDTH	0.5
 #define OVERLAP		0.98
@@ -41,7 +42,8 @@
 
 /* Functions */
 int get_wav_data(void);
-int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input);
+int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input, 
+	unsigned long long frames);
 float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, 
 	int samp_freq, const uint8_t **wav_data, int band, int *resamp_frms);
 float * oct_filt_data(float *output_data, float band, float samp_freq, 
@@ -52,9 +54,10 @@ int ** apply_polyfit(float samp_freq, int resamp_frames, float *env,
 	int *s_e_size);
 int ** choose_segments(float *var, int step_size, int len, int not_dumped,
 	int *seg_num_els);
-int * perform_ml(int **start_end, float *env, int s_e_size, 
+int perform_ml(int **start_end, float *env, int s_e_size, 
 	float *filtered_wav, int resamp_frames, int samp_freq);
-int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg);
+int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg,
+	double *a_par, double *b_par, double *alph_par);
 double alpha_opt(int n, const double *a, double *grad, void *nldv);
 double par_3_opt(int n, const double *a, double *grad, void *nldv);
 int plot_wav(float *wav_data, int channels, sf_count_t frames, int samprate);
@@ -148,7 +151,7 @@ int get_wav_data(void) {
 	SF_INFO input_info;
 	float *wav_data;
 	unsigned long long long_ret = 0;	
-	int ret;
+	int i, ret = 0;
 
 	/* Open file */
 	input_info.format = 0;
@@ -166,8 +169,8 @@ int get_wav_data(void) {
 	 *	expected format: mono and 16 bit signed??? */
 
 	/* Store data in array */
-	wav_data = (float *) calloc(input_info.frames * input_info.channels, 
-		sizeof(float));
+	wav_data = (float *) calloc(input_info.frames * input_info.channels 
+		/ SPLIT, sizeof(float));
 
 	if (wav_data == NULL) {
 		printf("Memory allocation error\nExiting...\n");
@@ -176,14 +179,11 @@ int get_wav_data(void) {
 	}
 
 	/* Single channel, so can call this way */
-	long_ret = sf_read_float(input, wav_data, input_info.frames);		
+//	for (i = 0; i <= SPLIT; i++) {
+		long_ret = sf_read_float(input, wav_data, 
+				floor(input_info.frames / SPLIT));
 
-	if (long_ret != input_info.frames) {
-		printf("Error! Some frames not read\nExiting...");
-		free(wav_data);
-		sf_close(input);
-		return -1;
-	}
+		printf("DEBUG Read: %llu\n", long_ret);
 
 
 #if 0
@@ -199,8 +199,9 @@ int get_wav_data(void) {
 	}
 #endif
 
-	/* Process the wav data */
-	ret = process_wav_data(wav_data, input_info, input);
+		/* Process the wav data */
+		ret |= process_wav_data(wav_data, input_info, input, long_ret);
+//	}
 
 	/* Clean up */	
 	free(wav_data);
@@ -209,7 +210,8 @@ int get_wav_data(void) {
 }
 
 
-int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
+int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input,
+		unsigned long long frames) {
 	int i, ret, s_e_size, resamp_frames = 0, **start_end;
 	float *resampled_wav, *filtered_wav, *env;
 
@@ -241,7 +243,7 @@ int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
 
 		/* Resample the audio */
 		resampled_wav = resamp_wav_data(resamp, input_info.samplerate, 
-			(uint64_t) input_info.frames, samp_freq_per_band[i],
+			(uint64_t) frames, samp_freq_per_band[i],
 			(const uint8_t **) &wav_data, octave_bands[i], 
 			&resamp_frames);
 
@@ -264,7 +266,7 @@ int process_wav_data(float *wav_data, SF_INFO input_info, SNDFILE *input) {
 		start_end = apply_polyfit((float) samp_freq_per_band[i], 
 			resamp_frames, env, &s_e_size);
 
-		/* Preform Maximum Liklihood Estimation */
+		/* Perform Maximum Liklihood Estimation */
 		perform_ml(start_end, env, s_e_size, filtered_wav, 
 			resamp_frames, samp_freq_per_band[i]);
 	}
@@ -590,12 +592,20 @@ int ** choose_segments(float *var, int step_size, int len, int not_dumped,
 	return seg_index;
 }
 
-int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav, int resamp_frames, int samp_freq) {
-	int sz, i, j, k, len, min_abs_filt_seg, max_abs_filt_seg, max2, ret = 0;
+int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav, 
+		int resamp_frames, int samp_freq) {
+	int sz, i, j, k, len, min_abs_filt_seg, max_abs_filt_seg, ret = 0;
 	float *segment, *env_seg, *abs_filt_seg, *seg_seg2, max_seg2;
 	float *abs_filtered = calloc(resamp_frames, sizeof(float));
 	int *store_start = calloc(s_e_size, sizeof(int)); 
 	int *store_end = calloc(s_e_size, sizeof(int));
+	int *len_store = calloc(s_e_size, sizeof(int));
+	double *a_par = calloc(s_e_size, sizeof(double));
+	double *b_par = calloc(s_e_size, sizeof(double));
+	double *alpha = calloc(s_e_size, sizeof(double));
+	double *dr = calloc(s_e_size, sizeof(double));
+	double *chan = calloc(6 * samp_freq, sizeof(double));
+	double *y = calloc(6 * samp_freq, sizeof(double));
 
 	/* Get absolute vaule of filtered wav */
 	for (i = 0; i < resamp_frames; i++)
@@ -642,28 +652,50 @@ int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 			j++)
 			seg_seg2[k] = segment[j];
 
-		max2 = k - 1;
+		/* NB: len_store[] contains INDEX to last element, not # of
+			elements in array */
+		len_store[i] = k - 1;
 		
 		k = 0;
-		for (j = 0; j <= max2; j++) {
+		for (j = 0; j <= len_store[i]; j++) {
 			if (fabs(seg_seg2[j]) > fabs(seg_seg2[k]))
 				k = j; 
 		}
 		
 		max_seg2 = fabs(seg_seg2[k]);	
-		for (j = 0; j <= max2; j++)
+		for (j = 0; j <= len_store[i]; j++)
 			seg_seg2[j] /= max_seg2;
 
 		/* Save fine-tuned start and end locations */
+		// FIXME: are the -1's OK here? Compare to MATLAB
 		store_start[i] = start_end[0][i] + max_abs_filt_seg;
-		store_end[i] = start_end[0][i] + max_abs_filt_seg + max2 - 1;
+		store_end[i] = start_end[0][i] + max_abs_filt_seg + 
+				len_store[i] - 1;
 
 		/* ML fitting of decay model to the data */
-		ret = ml_fit(seg_seg2, max2, (float) samp_freq, 
-			fabs(seg_seg2[k]));
+		ret = ml_fit(seg_seg2, len_store[i], (float) samp_freq, 
+			fabs(seg_seg2[k]), &a_par[i], &b_par[i], &alpha[i]);
 
 		/* FIXME: use ret to check for error */
 		/* FIXME: fix all error cases - clean exit and all that */
+
+		/* Cumpute decay curves using ML-calculated params */
+		for (j = 0; j < 6 * samp_freq; j++) {
+			chan[j] = alpha[i] * pow(a_par[i], j) + 
+				(1.0 - alpha[i]) * pow(b_par[i], j);
+		}
+
+		/* Get the reverse cumsum of chan[] and assign to y in reverse
+			order again */
+		y[0] = chan[6 * samp_freq - 1];
+		for (j = 6 * samp_freq - 2, k = 1; j >= 0; j--, k++) 
+			y[k] = chan[j] + y[k - 1];
+
+		/* Normalise y - last value will be max; stores cumsum */
+		for (j = 0; j < 6 * samp_freq; j++) 
+			y[j] = 10.0 * log10(y[j] / abs(y[6 * samp_freq - 1]));
+
+		dr[i] = y[len_store[i]];	
 
 		/* Reset to zero b/c arrays are longer than they need to be */
 		memset(segment, 0, sz * sizeof(float));
@@ -673,17 +705,26 @@ int * perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 		memset(abs_filt_seg, 0, sz * sizeof(float));
 	}
 
+	/* Pointers used by caller cannoot be freed. They are alpah[], a[],
+		b[], len_store[], store_start[], store_end[] and dr[] */
+
+	/* Free pointers that are no longer needed */
 	free(segment);
 	free(seg_seg2);
 	free(env_seg);
 	free(abs_filt_seg);
 	free(abs_filtered);
-	free(store_start);
-	free(store_end);
-	return NULL;
+	free(chan);
+	free(y);
+
+	if (ret < 0)
+		return -1;
+	else
+		return 0;
 }
 
-int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
+int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg,
+		double *a_par, double *b_par, double *alph_par) {
 	double min, max, interval, j, gmax_val, x_fine[3], fine_val;
 	double *coarse_grid, lb[3], ub[3];
 	double like[SQP_STEP][SQP_STEP] = {0}, alpha[SQP_STEP][SQP_STEP] = {0};
@@ -748,7 +789,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
 				}
 			}
 
-//			printf("k: %d, i: %d, ret: %d, a: %le like: %le coarse: %le\n", k, i, ret, alpha[k][i], like[k][i], coarse_grid[k]);
+//			printf("k: %d, i: %d, ret: %d, a: %lf like: %le coarse: %lf\n", k+1, i+1, ret, alpha[k][i], like[k][i], coarse_grid[k]);
 		}
 	}
 
@@ -772,9 +813,16 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg) {
 	x_fine[0] = coarse_grid[gmax_pos[0]];
 	x_fine[1] = coarse_grid[gmax_pos[1]];
 	x_fine[2] = alpha[gmax_pos[0]][gmax_pos[1]];	
+	printf("B4 XVAL: %lf %lf %lf \n", x_fine[0], x_fine[1], x_fine[2]); 
 
 	ret |= nlopt_optimize(nl_obj3, x_fine, &fine_val);
-	printf("FINE_VAL: %le\n", fine_val);	
+	printf("ret: %d XVAL: %lf %lf %lf FINE_VAL: %le\n", ret, x_fine[0], 
+		x_fine[1], x_fine[2], fine_val);	
+	
+	/* Return a, b, alpha in pointers */
+	*a_par = x_fine[0];
+	*b_par = x_fine[1];
+	*alph_par = x_fine[2];
 	
 	free(coarse_grid);
 
@@ -843,7 +891,6 @@ double par_3_opt(int n, const double *a, double *grad, void *nldv)
 	double a_val = a[0], b_val = a[1], alpha = a[2], sigma_tot = 0;
 	double *env = calloc(nld->len, sizeof(double));
 	double like = 0, x = 0;
-	
 
 	for (i = 0; i < nld->len; i++) {
 		env[i] = alpha * pow(a_val, i) + (1.0 - alpha) * pow(b_val, i);
@@ -851,19 +898,20 @@ double par_3_opt(int n, const double *a, double *grad, void *nldv)
 		sigma_tot -= (-1.0 / pow(env[i], 2)) * pow(nld->data_seg[i], 2);
 	}
 
-	sigma_tot = sqrt(sigma_tot / nld->len);
+	sigma_tot = sqrt(sigma_tot / (double) nld->len);
 
 	for (i = 0; i < nld->len; i++) {
 		like -= log(env[i]);
 
 		x += pow(env[i], -2) * pow(nld->data_seg[i], 2) / 
-			2.0 * pow(sigma_tot, 2);
+			(2.0 * pow(sigma_tot, 2));
 	}
 
-	like -= x + nld->len * log(2.0 * M_PI * pow(sigma_tot, 2)) / 2.0;
+	like -= (x + (double) nld->len * log(2.0 * M_PI * 
+			pow(sigma_tot, 2)) / 2.0);
 
 	free(env);
-	return -like; 
+	return -like;
 }
 
 /* Function uses Gnuplot to plot the wav envelope */
