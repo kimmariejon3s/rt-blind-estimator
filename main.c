@@ -55,7 +55,9 @@ int ** apply_polyfit(float samp_freq, int resamp_frames, float *env,
 int ** choose_segments(float *var, int step_size, int len, int not_dumped,
 	int *seg_num_els);
 int perform_ml(int **start_end, float *env, int s_e_size, 
-	float *filtered_wav, int resamp_frames, int samp_freq);
+	float *filtered_wav, int resamp_frames, int samp_freq,
+	double **p_alpha, double **p_a_par, double **p_b_par, double **p_dr,
+	int **p_len, int **p_start);
 int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg,
 	double *a_par, double *b_par, double *alph_par);
 double alpha_opt(int n, const double *a, double *grad, void *nldv);
@@ -219,6 +221,8 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 		SNDFILE *input, unsigned long long frames) {
 	int ret, s_e_size, resamp_frames = 0, **start_end;
 	float *resampled_wav, *filtered_wav, *env;
+	double *alpha, *a, *b, *dr;
+	int *len, *store_start;
 
 	printf("DEBUG: resample init\n");
 
@@ -271,7 +275,8 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 
 	/* Perform Maximum Liklihood Estimation */
 	perform_ml(start_end, env, s_e_size, filtered_wav, 
-		resamp_frames, samp_freq_per_band[band]);
+		resamp_frames, samp_freq_per_band[band], &alpha, &a, &b, &dr,
+		&len, &store_start);
 	return 0;
 }
 
@@ -595,7 +600,9 @@ int ** choose_segments(float *var, int step_size, int len, int not_dumped,
 }
 
 int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav, 
-		int resamp_frames, int samp_freq) {
+		int resamp_frames, int samp_freq, double **p_alpha, 
+		double **p_a_par, double **p_b_par, double **p_dr, int **p_len,
+		int **p_start) {
 	int sz, i, j, k, len, min_abs_filt_seg, max_abs_filt_seg, ret = 0;
 	float *segment, *env_seg, *abs_filt_seg, *seg_seg2, max_seg2;
 	float *abs_filtered = calloc(resamp_frames, sizeof(float));
@@ -707,8 +714,14 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 		memset(abs_filt_seg, 0, sz * sizeof(float));
 	}
 
-	/* Pointers used by caller cannoot be freed. They are alpah[], a[],
+	/* Pointers used by caller cannoot be freed. They are alpha[], a[],
 		b[], len_store[], store_start[], store_end[] and dr[] */
+	*p_alpha = alpha;
+	*p_a_par = a_par;
+	*p_b_par = b_par;
+	*p_dr = dr;
+	*p_len = len_store;
+	*p_start = store_start;
 
 	/* Free pointers that are no longer needed */
 	free(segment);
