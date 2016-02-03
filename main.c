@@ -43,7 +43,8 @@
 /* Functions */
 int get_wav_data(void);
 int process_wav_data(int band, float *wav_data, SF_INFO input_info, 
-	SNDFILE *input, unsigned long long frames);
+	SNDFILE *input, unsigned long long frames, double **p_alpha,
+	double **p_a, double **p_b, double **p_dr, int **p_len, int **p_start);
 float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, 
 	int samp_freq, const uint8_t **wav_data, int band, int *resamp_frms);
 float * oct_filt_data(float *output_data, float band, float samp_freq, 
@@ -145,6 +146,9 @@ int main(void)
 
 	ret = get_wav_data();
 
+	if (ret != 0)
+		printf("Error returned during calculations...\n");
+
 	return ret;
 }
 
@@ -153,7 +157,16 @@ int get_wav_data(void) {
 	SF_INFO input_info;
 	float *wav_data;
 	unsigned long long long_ret = 0;	
-	int band, i, ret = 0;
+	int *len, *store_start, band, i, ret = 0;
+	double *a, *b, *alpha, *dr;
+
+	/* Create arrays large enough to store values */
+	a = calloc(input_info.frames, sizeof(double));
+	b = calloc(input_info.frames, sizeof(double));
+	alpha = calloc(input_info.frames, sizeof(double));
+	dr = calloc(input_info.frames, sizeof(double));
+	len = calloc(input_info.frames, sizeof(int));
+	store_start = calloc(input_info.frames, sizeof(int));
 
 	/* Open file */
 	input_info.format = 0;
@@ -205,20 +218,32 @@ int get_wav_data(void) {
 #endif
 
 			/* Process the wav data */
-			ret |= process_wav_data(band, wav_data, input_info, 
-				input, long_ret);
+			ret = process_wav_data(band, wav_data, input_info, 
+				input, long_ret, &alpha, &a, &b, &dr, &len,
+				&store_start);
+
+			if (ret < 0) {
+				free(wav_data);
+				sf_close(input);
+				return -1;
+			}
+				
+			// SUM THE ARRAYS
+			
 	//	}
 	}
 
 	/* Clean up */	
 	free(wav_data);
 	sf_close(input);
-	return ret;
+	return 0;
 }
 
 
 int process_wav_data(int band, float *wav_data, SF_INFO input_info, 
-		SNDFILE *input, unsigned long long frames) {
+		SNDFILE *input, unsigned long long frames, double **p_alpha,
+		double **p_a, double **p_b, double **p_dr, int **p_len,
+		int **p_start) {
 	int ret, s_e_size, resamp_frames = 0, **start_end;
 	float *resampled_wav, *filtered_wav, *env;
 	double *alpha, *a, *b, *dr;
@@ -274,10 +299,22 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 		resamp_frames, env, &s_e_size);
 
 	/* Perform Maximum Liklihood Estimation */
-	perform_ml(start_end, env, s_e_size, filtered_wav, 
+	ret = perform_ml(start_end, env, s_e_size, filtered_wav, 
 		resamp_frames, samp_freq_per_band[band], &alpha, &a, &b, &dr,
 		&len, &store_start);
-	return 0;
+
+	/* Return pointers to caller */
+	*p_alpha = alpha;
+	*p_a = a;
+	*p_b = b;
+	*p_dr = dr;
+	*p_len = len;
+	*p_start = store_start;
+
+	if (ret != 0)
+		return -1;
+	else
+		return 0;
 }
 
 float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int samp_freq, const uint8_t **wav_data, int band, int *resamp_frms) {
