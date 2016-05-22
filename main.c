@@ -300,14 +300,15 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 				if (store_start[j] >= pos_from && 
 						store_end[j] < pos_to) {
 					optimum_model(a[j], b[j], alpha[j], dr[j],
-							 samp, n_chan, &chan[k]);
+							samp, n_chan, 
+							&chan[k][0]);
 
 					k++;		
 				}
 			}
 		}
 
-		optimum_model_2(&chan, k);
+		optimum_model_2(chan, n_chan, k, samp);
 
 	}
 
@@ -340,25 +341,23 @@ int optimum_model(double a, double b, double alpha, double dr, int samp, int n,
 }
 
 
-int optimum_model_2(double *chan, int n, int samp, int chan_sz) {
+int optimum_model_2(double *chan, int n, int chan_sz, int samp) {
 	double winn = 0.1;
-	double n2, l_reg, min, *win;
-	double chan_sum[chan_sz] = {0};
-	double nn = winn * samp;
 	double over = 0.5;
-	int i, j, k, i_dr, n1, min_index, 
+	int nn = winn * samp;
+	int i, j, k, n1, min_index, l_reg; 
 	int n0 = floor((1.0 - over) * nn);
 	int n_sect = floor(((double)n - nn) / n0);
+	double n2, min, *win, chan_sum[chan_sz], lin[n], last[n]; 
 
-	for (i = 0, i_dr = 0, n1 = 0; i < n_sect; i++) {
-		i_dr++;
-		n2 = n1 + nn - 1;
-		l_reg = n2 - n1 + 1;
+	for (i = 0, n1 = 0; i < n_sect; i++) {
+		n2 = n1 + nn;
+		l_reg = n2 - n1;
 
-		for (j = n1; j < chan_sz; j++) {
-			for (k = n1; k < n2; k++) {
+		for (j = 0; j < chan_sz; j++) {
+			chan_sum[j] = 0;
+			for (k = n1; k < n2; k++) 
 				chan_sum[j] += pow(chan[j][k], 2); 
-			}
 
 			/* Get the minimum */
 			if (j == 0) {
@@ -371,21 +370,30 @@ int optimum_model_2(double *chan, int n, int samp, int chan_sz) {
 					min_index = j;
 				}
 			}
-
-			if (i_dr == 0) {
-				
-			} else {
-				win = hanning(l_reg);
-
-				for (k = l_reg / 2 - 1; k < l_reg; k++)
-					win[k] = 1.0;
-
-				
-
-				
-
-			}	
 		}
+
+		if (i == 0) {
+			for (k = 0; k < n; k++) {
+				if (k >= n1 && k < n2)
+					lin[k] = chan[min_index][k];
+
+				last[k] = chan[min_index][k];
+			}
+		} else {
+			win = hanning(l_reg);
+
+			for (k = l_reg / 2 - 1; k < l_reg; k++)
+				win[k] = 1.0;
+
+			for (k = 0; k < n; k++) {
+				if (k >= n1 && k < n2) {
+					lin[k] = last[k] * abs(win[k] - 1.0) + 
+						chan[min_index][k] * win[k];
+				}
+
+				last[k] = chan[min_index][k];
+			}
+		}	
 		n1 += n0;
 	}
 
