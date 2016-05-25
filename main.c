@@ -15,6 +15,7 @@
 #include <liquid/liquid.h>
 #include <nlopt.h>
 #include "kiss_fft.h"
+#include <svdlib.h>
 
 //FIXME: make this 20 when I decide to do the split stuff
 #define SPLIT		1
@@ -41,15 +42,16 @@
 #define SQP_STEP	5
 
 #define SEG_LEN		3 * 60		/* 3 minutes */
+#define RT_DECAY	35		/* 25 = T25 decay; 35 = T35 decay */
 
 /* Functions */
-int get_wav_data(void);
-int compute_rt(int samp, int array_size, int *store_start, int *store_end, 
+double get_wav_data(void);
+double compute_rt(int samp, int array_size, int *store_start, int *store_end, 
 	double *dr, double *a, double *b, double *alpha);
 int optimum_model(double a, double b, double alpha, double dr, int samp, int n,
 	double *chan_2);
-int optimum_model_2();
-double * hanning(int len);
+int optimum_model_2(double *chan, int n, int chan_sz, int samp, double *lin);
+void hanning(int len, double *hann);
 int process_wav_data(int band, float *wav_data, SF_INFO input_info, 
 	SNDFILE *input, unsigned long long frames, double **p_alpha,
 	double **p_a, double **p_b, double **p_dr, int **p_len, int **p_start,
@@ -155,20 +157,20 @@ int main(void)
 
 	ret = get_wav_data();
 
-	if (ret != 0)
+	if (ret < 0)
 		printf("Error returned during calculations...\n");
 
 	return ret;
 }
 
 
-int get_wav_data(void) {
+double get_wav_data(void) {
 	SF_INFO input_info;
 	float *wav_data;
 	unsigned long long long_ret = 0;	
 	int *len, *store_start, *store_end;
 	int band, i, j, array_size, n_seg, seg_len_n, ret = 0;
-	double *a, *b, *alpha, *dr;
+	double *a, *b, *alpha, *dr, rev_time;
 
 	/* Create arrays large enough to store values */
 	a = calloc(input_info.frames, sizeof(double));
@@ -229,9 +231,11 @@ int get_wav_data(void) {
 #endif
 
 			/* Process the wav data */
+			printf("DEBUG: Start process_wav_data\n");
 			ret = process_wav_data(band, wav_data, input_info, 
 				input, long_ret, &alpha, &a, &b, &dr, &len,
 				&store_start, &store_end);
+			printf("DEBUG: End process_wav_data\n");
 
 			/* If ret <= 0, error */
 			/* If > 0, ret is the size of the returned arrays */
@@ -247,25 +251,34 @@ int get_wav_data(void) {
 	//	}
 	}
 
+	printf("DEBUG: Start compute_rt\n");
 	/* Compute the reverberation time (RT) */
-	compute_rt(samp_freq_per_band[band], array_size, store_start, store_end,
-		dr, a, b, alpha);
+	rev_time = compute_rt(samp_freq_per_band[band], array_size, store_start,
+		store_end, dr, a, b, alpha);
 
 	/* Clean up */	
 	free(wav_data);
 	sf_close(input);
-	return 0;
+	return rev_time;
 }
 
 
 /* 
  * Compute RT for room 
  */
-int compute_rt(int samp, int array_size, int *store_start, int *store_end, 
+double compute_rt(int samp, int array_size, int *store_start, int *store_end, 
 		double *dr, double *a, double *b, double *alpha) {
-	int n_seg, file_len, pos_to, pos_from, seg_len_n, i, j, k;
+	int n_seg, file_len, pos_to, pos_from, seg_len_n, i, j, k, l_reg;
+	int min_5dB_index, min_rtdB_index;
 	int n_chan = 4 * samp;
 	double chan[array_size][n_chan];
+	double chan_opt[n_chan], chan_opt_log[n_chan];
+	double rev_time, max, min_5dB, min_rtdB, **mat_a;
+	SVDRec svd_mat = malloc(sizeof(SVDRec));
+	DMat dmat_a_mat = malloc(sizeof(DMat));
+
+	/* Allocate space for first dimension of matrix (used later) */
+	*mat_a = calloc(2, sizeof(double *));
 
 	/* Find the end position of the last decay phase by finding max
 	 *	of store_end[] */
@@ -275,6 +288,7 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 			file_len = store_start[i];
 	}
 
+	printf("DEBUG: Gets here\n");
 	/* seg_len_n is the number of samples in the length of time
 	 *	chosen, seg_len. n_seg is the number of chunks, For
 	 *	example, if seg_len = 180 secs and file_len = 6200
@@ -299,6 +313,7 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 				/* Does decay rate occur in this chunk? */
 				if (store_start[j] >= pos_from && 
 						store_end[j] < pos_to) {
+					printf("DEBUG: start optimum_model\n");
 					optimum_model(a[j], b[j], alpha[j], dr[j],
 							samp, n_chan, 
 							&chan[k][0]);
@@ -308,11 +323,106 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 			}
 		}
 
-		optimum_model_2(chan, n_chan, k, samp);
+		printf("DEBUG: start optimum_model_2\n");
+		optimum_model_2(&chan[0][0], n_chan, k, samp, chan_opt);
 
+		/* Get cumulative sum and max value */
+		chan_opt_log[n_chan - 1] = pow(chan_opt[n_chan - 1], 2);
+		max = abs(chan_opt_log[n_chan - 1]);
+		for (j = n_chan - 2; j >= 0; j--) {
+			chan_opt_log[j] = pow(chan_opt[j], 2) + chan_opt_log[j+1];
+
+			if (abs(chan_opt_log[j]) > max)
+				max = abs(chan_opt_log[j]); 
+		}
+
+		for (j = 0; j < n_chan; j++) {
+			/* Convert to decibels */
+			chan_opt_log[j] = 10 * log10(chan_opt_log[j] / max);
+
+			/* Find -5 dB and -RT_DECAY dB decay points */
+			if (j == 0) {
+				min_5dB = abs(chan_opt_log[0] - (-5));
+				min_rtdB = abs(chan_opt_log[0] - (-RT_DECAY));
+				min_5dB_index = 0;
+				min_rtdB_index = 0;
+			} else {
+				if (abs(chan_opt_log[j] - (-5)) < min_5dB) {
+					min_5dB = abs(chan_opt_log[j] - (-5));
+					min_5dB_index = j;
+				}
+
+				if (abs(chan_opt_log[j] -(-RT_DECAY)) < min_rtdB) {
+					min_rtdB = abs(chan_opt_log[j] - 
+						(-RT_DECAY));
+					min_rtdB_index = j;
+				}
+			}
+		}
+
+		l_reg = min_rtdB_index - min_5dB_index + 1;
+
+		/* Allocate space for mat_a */
+		for (k = 0; k < 2; k++)
+			mat_a[k] = calloc(l_reg, sizeof(double));
+
+		/* Get the RT */
+		for (j = min_5dB_index; j <= min_rtdB_index; j++) {
+			mat_a[j][0] = 1.0;
+			mat_a[j][1] = (double)j;
+		}
+
+		/* Get the SVD of mat_a */
+		dmat_a_mat->rows = 2;
+		dmat_a_mat->cols = l_reg;
+		dmat_a_mat->value = mat_a;				
+
+		svd_mat = svdLAS2A(svdConvertDtoS(dmat_a_mat), 2);
+
+		/* Get reciprocal of S */
+		for (k = 0; k < 2; k++)
+			svd_mat->S[k] = 1.0 / svd_mat->S[k];
+
+		/* Multiply modified S val by V */
+		for (k = 0; k < 2; k++)
+			for (j = 0; j < 2; j++)
+				svd_mat->Vt->value[k][j] *= svd_mat->S[k];
+
+		/* Matrix multiplcation of modified V with U */
+		for (j = 0; j < l_reg; j++) {
+			mat_a[j][0] = svd_mat->Ut->value[0][j] *
+				svd_mat->Vt->value[0][0];
+
+			mat_a[j][1] = svd_mat->Ut->value[1][j] * 
+				svd_mat->Vt->value[1][1];
+
+			mat_a[j][0] += svd_mat->Ut->value[1][j] *
+					svd_mat->Vt->value[1][0];
+
+			mat_a[j][1] += svd_mat->Ut->value[0][j] *
+					svd_mat->Vt->value[0][1];
+        	}
+
+		/* Multiply pseudoinverse by sig */
+		for (k = 0; k < l_reg; k++)
+			for (j = 0; j < 2; j++)
+				mat_a[k][j] *= chan_opt_log[k + min_5dB_index];
+
+		/* 
+		 * RT value to return
+		 */
+		rev_time = -60.0 / (samp * mat_a[1][0]);
+
+
+		/* Free array */
+		for (k = 0; k < 2; k++)
+			free(mat_a[k]);
 	}
 
-	return 0;
+	/* Free array */
+	free(mat_a);
+
+	return rev_time;
 }
 
 
@@ -341,14 +451,15 @@ int optimum_model(double a, double b, double alpha, double dr, int samp, int n,
 }
 
 
-int optimum_model_2(double *chan, int n, int chan_sz, int samp) {
+int optimum_model_2(double *chan, int n, int chan_sz, int samp, double *lin) {
 	double winn = 0.1;
 	double over = 0.5;
 	int nn = winn * samp;
 	int i, j, k, n1, min_index, l_reg; 
 	int n0 = floor((1.0 - over) * nn);
 	int n_sect = floor(((double)n - nn) / n0);
-	double n2, min, *win, chan_sum[chan_sz], lin[n], last[n]; 
+	double n2, min, chan_sum[chan_sz], last[n]; 
+	double win[nn * n_sect];
 
 	for (i = 0, n1 = 0; i < n_sect; i++) {
 		n2 = n1 + nn;
@@ -357,11 +468,11 @@ int optimum_model_2(double *chan, int n, int chan_sz, int samp) {
 		for (j = 0; j < chan_sz; j++) {
 			chan_sum[j] = 0;
 			for (k = n1; k < n2; k++) 
-				chan_sum[j] += pow(chan[j][k], 2); 
+				chan_sum[j] += pow(*((chan + j * n) + k), 2); 
 
 			/* Get the minimum */
 			if (j == 0) {
-				min = chan_sum[j];
+				min = chan_sum[0];
 				min_index = 0;
 			}
 			else {
@@ -375,12 +486,12 @@ int optimum_model_2(double *chan, int n, int chan_sz, int samp) {
 		if (i == 0) {
 			for (k = 0; k < n; k++) {
 				if (k >= n1 && k < n2)
-					lin[k] = chan[min_index][k];
+					lin[k] = *((chan + min_index * n) + k);
 
-				last[k] = chan[min_index][k];
+				last[k] = *((chan + min_index * n) + k);
 			}
 		} else {
-			win = hanning(l_reg);
+			hanning(l_reg, win);
 
 			for (k = l_reg / 2 - 1; k < l_reg; k++)
 				win[k] = 1.0;
@@ -388,10 +499,11 @@ int optimum_model_2(double *chan, int n, int chan_sz, int samp) {
 			for (k = 0; k < n; k++) {
 				if (k >= n1 && k < n2) {
 					lin[k] = last[k] * abs(win[k] - 1.0) + 
-						chan[min_index][k] * win[k];
+						*((chan + min_index * n) + k) * 
+						win[k];
 				}
 
-				last[k] = chan[min_index][k];
+				last[k] = *((chan + min_index * n) + k);
 			}
 		}	
 		n1 += n0;
@@ -400,14 +512,13 @@ int optimum_model_2(double *chan, int n, int chan_sz, int samp) {
 	return 0;
 }
 
-double * hanning(int len) {
+void hanning(int len, double *hann) {
 	int n;
-	double hann[len];
 
 	for (n = 0; n < len; n++)
 		hann[n] = 0.5 * (1.0 - cos(2.0 * M_PI * n / (len - 1.0)));
 
-	return hann;
+	return;
 }
 
 int process_wav_data(int band, float *wav_data, SF_INFO input_info, 
@@ -1053,11 +1164,11 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg,
 	x_fine[0] = coarse_grid[gmax_pos[0]];
 	x_fine[1] = coarse_grid[gmax_pos[1]];
 	x_fine[2] = alpha[gmax_pos[0]][gmax_pos[1]];	
-	printf("B4 XVAL: %lf %lf %lf %le\n", x_fine[0], x_fine[1], x_fine[2], -gmax_val); 
+	//printf("B4 XVAL: %lf %lf %lf %le\n", x_fine[0], x_fine[1], x_fine[2], -gmax_val); 
 
 	ret |= nlopt_optimize(nl_obj3, x_fine, &fine_val);
-	printf("ret: %d XVAL: %lf %lf %lf FINE_VAL: %le\n", ret, x_fine[0], 
-		x_fine[1], x_fine[2], fine_val);	
+	//printf("ret: %d XVAL: %lf %lf %lf FINE_VAL: %le\n", ret, x_fine[0], 
+	//	x_fine[1], x_fine[2], fine_val);	
 	
 	/* Return a, b, alpha in pointers */
 	*a_par = x_fine[0];
