@@ -45,9 +45,10 @@
 #define RT_DECAY	35		/* 25 = T25 decay; 35 = T35 decay */
 
 /* Functions */
-double get_wav_data(void);
-double compute_rt(int samp, int array_size, int *store_start, int *store_end, 
-	double *dr, double *a, double *b, double *alpha);
+int get_wav_data(void);
+int compute_rt(int samp, int array_size, int *store_start, int *store_end, 
+	double *dr, double *a, double *b, double *alpha, double *mean_rt,
+	double *rt_sd);
 int optimum_model(double a, double b, double alpha, double dr, int samp, int n,
 	double *chan_2);
 int optimum_model_2(double *chan, int n, int chan_sz, int samp, double *lin);
@@ -153,24 +154,26 @@ float butter_a[8][11] = {
 
 int main(void)
 {
-	int ret;
+	double ret;
 
 	ret = get_wav_data();
 
-	if (ret < 0)
+	if (ret < 0) {
 		printf("Error returned during calculations...\n");
+		return -1;
+	}
 
-	return ret;
+	return 0;
 }
 
 
-double get_wav_data(void) {
+int get_wav_data(void) {
 	SF_INFO input_info;
 	float *wav_data;
 	unsigned long long long_ret = 0;	
 	int *len, *store_start, *store_end;
 	int band, i, j, array_size, n_seg, seg_len_n, ret = 0;
-	double *a, *b, *alpha, *dr, rev_time;
+	double *a, *b, *alpha, *dr, mean_rt, rt_sd;
 
 	/* Create arrays large enough to store values */
 	a = calloc(input_info.frames, sizeof(double));
@@ -248,32 +251,35 @@ double get_wav_data(void) {
 				
 			// SUM THE ARRAYS IF SPLIT
 
+			printf("DEBUG: Start compute_rt\n");
+			/* Compute the reverberation time (RT) */
+			ret = compute_rt(samp_freq_per_band[band],
+				array_size, store_start, store_end, dr, a, b,
+				alpha, &mean_rt, &rt_sd);
 	//	}
+		printf("Mean RT for %d band: %lf\n", band, mean_rt);
+		printf("RT Standard Dev for %d band: %lf\n", band, rt_sd);
 	}
 
-	printf("DEBUG: Start compute_rt\n");
-	/* Compute the reverberation time (RT) */
-	rev_time = compute_rt(samp_freq_per_band[band], array_size, store_start,
-		store_end, dr, a, b, alpha);
 
 	/* Clean up */	
 	free(wav_data);
 	sf_close(input);
-	return rev_time;
+	return ret;
 }
 
 
 /* 
  * Compute RT for room 
  */
-double compute_rt(int samp, int array_size, int *store_start, int *store_end, 
-		double *dr, double *a, double *b, double *alpha) {
+int compute_rt(int samp, int array_size, int *store_start, int *store_end, 
+		double *dr, double *a, double *b, double *alpha, 
+		double *mean_rt, double *rt_sd) {
 	int n_seg, file_len, pos_to, pos_from, seg_len_n, i, j, k, l_reg;
 	int min_5dB_index, min_rtdB_index;
 	int n_chan = 4 * samp;
-	double chan[array_size][n_chan];
-	double chan_opt[n_chan], chan_opt_log[n_chan];
-	double rev_time, max, min_5dB, min_rtdB, **mat_a;
+	double chan[array_size][n_chan], chan_opt[n_chan], chan_opt_log[n_chan];
+	double *sd_rev_time, max, min_5dB, min_rtdB, **mat_a;
 	SVDRec svd_mat = malloc(sizeof(SVDRec));
 	DMat dmat_a_mat = malloc(sizeof(DMat));
 
@@ -296,6 +302,9 @@ double compute_rt(int samp, int array_size, int *store_start, int *store_end,
 	 *	1 shorter chunk). */
 	seg_len_n = SEG_LEN * samp;
 	n_seg = ceil((double)file_len / seg_len_n);
+
+	/* Create array to store standard deviation values */
+	sd_rev_time = calloc(n_seg, sizeof(double));
 
 	for (i = 0; i < n_seg; i++) {
 		/* Get start and end positions of each chunk */
@@ -409,20 +418,30 @@ double compute_rt(int samp, int array_size, int *store_start, int *store_end,
 				mat_a[k][j] *= chan_opt_log[k + min_5dB_index];
 
 		/* 
-		 * RT value to return
+		 * If RT for segment != nan, add to rev_time
 		 */
-		rev_time = -60.0 / (samp * mat_a[1][0]);
-
+		if(!isnan(-60.0 / (samp * mat_a[1][0]))) {
+			*mean_rt += -60.0 / (samp * mat_a[1][0]);
+			sd_rev_time[i] = -60.0 / (samp * mat_a[1][0]);
+		}
 
 		/* Free array */
 		for (k = 0; k < 2; k++)
 			free(mat_a[k]);
 	}
 
+	/* Get mean RT and standard dev of RT */
+	*mean_rt /= n_seg;
+
+	for (i = 0; i < n_seg; i++) 
+		*rt_sd = pow(abs(sd_rev_time[i] - *mean_rt),2);
+
+	*rt_sd = sqrt(*rt_sd / (n_seg - 1));
+
 	/* Free array */
 	free(mat_a);
 
-	return rev_time;
+	return 0;
 }
 
 
