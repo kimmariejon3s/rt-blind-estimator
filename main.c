@@ -283,8 +283,9 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 	SVDRec svd_mat = malloc(sizeof(SVDRec));
 	DMat dmat_a_mat = malloc(sizeof(DMat));
 
+	printf("DEBUG: Gets here\n");
 	/* Allocate space for first dimension of matrix (used later) */
-	*mat_a = calloc(2, sizeof(double *));
+	mat_a = calloc(2, sizeof(double *));
 
 	/* Find the end position of the last decay phase by finding max
 	 *	of store_end[] */
