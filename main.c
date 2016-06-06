@@ -275,17 +275,22 @@ int get_wav_data(void) {
 int compute_rt(int samp, int array_size, int *store_start, int *store_end, 
 		double *dr, double *a, double *b, double *alpha, 
 		double *mean_rt, double *rt_sd) {
+	printf("DEBUG: Gets here\n");
 	int n_seg, file_len, pos_to, pos_from, seg_len_n, i, j, k, l_reg;
 	int min_5dB_index, min_rtdB_index;
 	int n_chan = 4 * samp;
-	double chan[array_size][n_chan], chan_opt[n_chan], chan_opt_log[n_chan];
+	printf("DEBUG: Gets here 2\n");
+	double **chan, chan_opt[n_chan], chan_opt_log[n_chan];
+	printf("DEBUG: Gets here 3\n");
 	double *sd_rev_time, max, min_5dB, min_rtdB, **mat_a;
 	SVDRec svd_mat = malloc(sizeof(SVDRec));
 	DMat dmat_a_mat = malloc(sizeof(DMat));
 
-	printf("DEBUG: Gets here\n");
-	/* Allocate space for first dimension of matrix (used later) */
 	mat_a = calloc(2, sizeof(double *));
+	chan = calloc(array_size, sizeof(double *));
+
+	for (i = 0; i < array_size; i++)
+		chan[i] = calloc(n_chan, sizeof(double));
 
 	/* Find the end position of the last decay phase by finding max
 	 *	of store_end[] */
