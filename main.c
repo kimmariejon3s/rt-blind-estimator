@@ -31,7 +31,7 @@
 #define N_ENV 		ENV_FILT_ORDER
 #define R_ENV 		N_ENV % 2
 #define L_ENV 		(N_ENV - R_ENV) / 2
-#define LOW_PASS_CUTOFF	80
+#define LOW_PASS_CUTOFF	80.0
 #define DAMP_SEG_SIZE	0.5
 #define DAMP_STEP_SIZE	0.002
 #define MAX_RT		100.0	
@@ -92,11 +92,11 @@ int octave_bands[] = {63, 125, 250, 500, 1000, 2000, 4000, 8000};
 int samp_freq_per_band[] = {3000, 3000, 3000, 3000, 3000, 6000, 12000, 24000};
 
 #if OCT_FILT_ORDER >= ENV_FILT_ORDER
-	float b[3 * (L_OCT + R_OCT)] = {0};
-	float a[3 * (L_OCT + R_OCT)] = {0};
+	float butt_b[3 * (L_OCT + R_OCT)] = {0};
+	float butt_a[3 * (L_OCT + R_OCT)] = {0};
 #else
-	float b[3 * (L_ENV + R_ENV)] = {0};
-	float a[3 * (L_ENV + R_ENV)] = {0};
+	float butt_b[3 * (L_ENV + R_ENV)] = {0};
+	float butt_a[3 * (L_ENV + R_ENV)] = {0};
 #endif
 
 /* Parameters as calculated by matlab */
@@ -188,6 +188,7 @@ int get_wav_data(void) {
 	input_info.format = 0;
 	SNDFILE *input = 
 		sf_open("/home/kim/wav_samples/mono_bach_partita_e_maj.wav",
+		//sf_open("/home/kim/BlindRT/DS_Science_S6_L1.wav",
 		SFM_READ, &input_info);
 
 	/* Print header data */
@@ -257,8 +258,8 @@ int get_wav_data(void) {
 				array_size, store_start, store_end, dr, a, b,
 				alpha, &mean_rt, &rt_sd);
 	//	}
-		printf("Mean RT for %d band: %lf\n", band, mean_rt);
-		printf("RT Standard Dev for %d band: %lf\n", band, rt_sd);
+		printf("Mean RT for %d band: %lf\n", octave_bands[band], mean_rt);
+		printf("RT Standard Dev for %d band: %lf\n", octave_bands[band], rt_sd);
 	}
 
 
@@ -298,6 +299,7 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 	for (i = 0; i < array_size; i++) {
 		if (store_end[i] > n_seg)
 			file_len = store_start[i];
+			n_seg = store_end[i];
 	}
 
 	printf("DEBUG: Gets here\n");
@@ -337,6 +339,9 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 				}
 			}
 		}
+
+		if (k <= 0)
+			return 0;
 
 		printf("DEBUG: start optimum_model_2\n");
 		optimum_model_2(&chan[0][0], n_chan, k, samp, chan_opt);
@@ -679,17 +684,20 @@ float * oct_filt_data(float *resamp_data, float band, float samp_freq, int resam
 	int i;
 	float *filtered = calloc(resamp_frames, sizeof(float)); 
 
+	memset(butt_b, 0, sizeof(butt_b));
+	memset(butt_a, 0, sizeof(butt_a));
+
 	/* Create bandpass filter - 7th and 8th parameter are ignored */
 	liquid_iirdes(LIQUID_IIRDES_BUTTER, LIQUID_IIRDES_BANDPASS, 
 		LIQUID_IIRDES_SOS, OCT_FILT_ORDER, 
 		band / (sqrt(2.0) * samp_freq), 
-		band / samp_freq, 1.0, 1.0, b, a);
-	//printf("res: %d\n\n", iirdes_isstable(b, a, 3 * (L_OCT + R_OCT)));
+		band / samp_freq, 1.0, 1.0, butt_b, butt_a);
+	//printf("res: %d\n\n", iirdes_isstable(butt_b, butt_a, 3 * (L_OCT + R_OCT)));
 
 //	for (i=0; i<(3 * (L_OCT + R_OCT)); i++)
-//		printf("b: %f and a: %f\n", b[i], a[i]);		
+//		printf("b: %f and a: %f\n", butt_b[i], butt_a[i]);		
 
-	iirfilt_rrrf f_obj_oct = iirfilt_rrrf_create_sos(b, a, (L_OCT + R_OCT));
+	iirfilt_rrrf f_obj_oct = iirfilt_rrrf_create_sos(butt_b, butt_a, (L_OCT + R_OCT));
 
 
 	/* Filter data */
@@ -715,17 +723,17 @@ float * get_envelope(float samp_freq, float *filtered_wav,
 
 	//FIXME add calloc NULL check	
 
-	memset(b, 0, sizeof(b));
-	memset(a, 0, sizeof(a));
+	memset(butt_b, 0, sizeof(butt_b));
+	memset(butt_a, 0, sizeof(butt_a));
 
 	/* Create Low Pass Filter - 6th, 7th and 8th param are ignored */
 	printf("DEBUG: Low pass filter and Hilbert transform\n");
 	liquid_iirdes(LIQUID_IIRDES_BUTTER, LIQUID_IIRDES_LOWPASS, 
 		LIQUID_IIRDES_SOS, ENV_FILT_ORDER, 
-		((float) LOW_PASS_CUTOFF) / samp_freq, 0.1, 
-		1.0, 1.0, b, a);
+		LOW_PASS_CUTOFF / samp_freq, 0.1, 
+		1.0, 1.0, butt_b, butt_a);
 
-	iirfilt_crcf f_obj_env = iirfilt_crcf_create_sos(b, a, (L_ENV + R_ENV));
+	iirfilt_crcf f_obj_env = iirfilt_crcf_create_sos(butt_b, butt_a, (L_ENV + R_ENV));
 
 	fftplan fft_pln = fft_create_plan(resamp_frames, (float complex *) 
 		filt_complex, (float complex *) tmp, LIQUID_FFT_FORWARD, 0);
@@ -959,6 +967,7 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 	double *dr = calloc(s_e_size, sizeof(double));
 	double *chan = calloc(6 * samp_freq, sizeof(double));
 	double *y = calloc(6 * samp_freq, sizeof(double));
+	double max_y;
 
 	/* Get absolute vaule of filtered wav */
 	for (i = 0; i < resamp_frames; i++)
@@ -985,7 +994,7 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 		// DEBUG: above values match matlab!
 
 		/* Get location of minimum */
-		min_abs_filt_seg = len - roundf((DAMP_SEG_SIZE / 2) * 
+		min_abs_filt_seg = len - round((DAMP_SEG_SIZE / 2) * 
 			samp_freq) - 1;
 		
 		for (j = min_abs_filt_seg; j < len; j++) {
@@ -995,7 +1004,7 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 		
 		/* Get location of maximum */
 		max_abs_filt_seg = 0;
-		for (j = 0; j < roundf((DAMP_SEG_SIZE / 2) * samp_freq); j++) {
+		for (j = 0; j < round((DAMP_SEG_SIZE / 2) * samp_freq); j++) {
 			if (abs_filt_seg[j] > abs_filt_seg[max_abs_filt_seg])
 				max_abs_filt_seg = j;
 		}
@@ -1029,6 +1038,31 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 		ret = ml_fit(seg_seg2, len_store[i], (float) samp_freq, 
 			fabs(seg_seg2[k]), &a_par[i], &b_par[i], &alpha[i]);
 
+#if 0
+                /* DEBUG: using matlab values to test */
+                if (i == 0) {
+                        a_par[i] = 0.999885193054;
+                        b_par[i] = 0.995180243256;
+                        alpha[i] = 1.000000000000;
+                }
+                if (i == 1) {
+                        a_par[i] = 0.999878346327;
+                        b_par[i] = 0.990000000000;
+                        alpha[i] = 0.751467410761;
+                }
+                if (i == 2) {
+                        a_par[i] = 0.9998735051930;
+                        b_par[i] = 0.9900000000000;
+                        alpha[i] = 0.7863959195535;
+                }
+                if (i == 3) {
+                        a_par[i] = 0.999990000000;
+                        b_par[i] = 0.998207538979;
+                        alpha[i] = 0.667957424959;
+                }
+                /*******************************/
+#endif
+
 		/* FIXME: use ret to check for error */
 		/* FIXME: fix all error cases - clean exit and all that */
 
@@ -1039,20 +1073,20 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 		}
 
 		/* Get the reverse cumsum of chan[] and assign to y in reverse */
-		y[6 * samp_freq - 1] = chan[6 * samp_freq - 1];
+		y[6 * samp_freq - 1] = pow(chan[6 * samp_freq - 1], 2);
 		for (j = 6 * samp_freq - 2; j >= 0; j--) 
-			y[j] = chan[j] + y[j + 1];
+			y[j] = pow(chan[j], 2) + y[j + 1];
 
 		/* Get max of fabs(y) */
-		k = fabs(y[0]);
+		max_y = fabs(y[0]);
 		for (j = 1; j < 6 * samp_freq; j++) {
-			if (fabs(y[j]) > k)
-				k = fabs(y[j]);		
+			if (fabs(y[j]) > max_y)
+				max_y = fabs(y[j]);		
 		}
 
 		/* Normalise y first value will be max; stores whole cumsum */
                 for (j = 0; j < 6 * samp_freq; j++) 
-			y[j] = 10.0 * log10(y[j] / k);
+			y[j] = 10.0 * log10(y[j] / max_y);
 
 		dr[i] = y[len_store[i]];	
 
@@ -1189,7 +1223,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg,
 	x_fine[0] = coarse_grid[gmax_pos[0]];
 	x_fine[1] = coarse_grid[gmax_pos[1]];
 	x_fine[2] = alpha[gmax_pos[0]][gmax_pos[1]];	
-	//printf("B4 XVAL: %lf %lf %lf %le\n", x_fine[0], x_fine[1], x_fine[2], -gmax_val); 
+	printf("B4 XVAL: %lf %lf %lf %le\n", x_fine[0], x_fine[1], x_fine[2], -gmax_val); 
 
 	ret |= nlopt_optimize(nl_obj3, x_fine, &fine_val);
 	//printf("ret: %d XVAL: %lf %lf %lf FINE_VAL: %le\n", ret, x_fine[0], 
