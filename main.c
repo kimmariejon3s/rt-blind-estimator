@@ -211,7 +211,7 @@ int get_wav_data(void) {
 	}
 
 	/* Octave band filtering */
-	for (band = 0; band < 1; band++) {	
+	for (band = 2; band < 3; band++) {	
 
 		/* Single channel, so can call this way */
 	//	for (i = 0; i <= SPLIT; i++) {
@@ -276,13 +276,10 @@ int get_wav_data(void) {
 int compute_rt(int samp, int array_size, int *store_start, int *store_end, 
 		double *dr, double *a, double *b, double *alpha, 
 		double *mean_rt, double *rt_sd) {
-	printf("DEBUG: Gets here\n");
 	int n_seg, file_len, pos_to, pos_from, seg_len_n, i, j, k, l_reg;
 	int min_5dB_index, min_rtdB_index;
 	int n_chan = 4 * samp;
-	printf("DEBUG: Gets here 2\n");
 	double **chan, chan_opt[n_chan], chan_opt_log[n_chan];
-	printf("DEBUG: Gets here 3\n");
 	double *sd_rev_time, max, min_5dB, min_rtdB, **mat_a;
 	SVDRec svd_mat = malloc(sizeof(SVDRec));
 	DMat dmat_a_mat = malloc(sizeof(DMat));
@@ -295,14 +292,12 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 
 	/* Find the end position of the last decay phase by finding max
 	 *	of store_end[] */
-	n_seg = store_end[0];
-	for (i = 0; i < array_size; i++) {
-		if (store_end[i] > n_seg)
-			file_len = store_start[i];
-			n_seg = store_end[i];
+	file_len = store_end[0];
+	for (i = 1; i < array_size; i++) {
+		if (store_end[i] > file_len)
+			file_len = store_end[i];
 	}
 
-	printf("DEBUG: Gets here\n");
 	/* seg_len_n is the number of samples in the length of time
 	 *	chosen, seg_len. n_seg is the number of chunks, For
 	 *	example, if seg_len = 180 secs and file_len = 6200
@@ -320,17 +315,17 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 		pos_to = (i+1) * seg_len_n - 1;
 
 		/* In case of partial chunk */
-		if (i == n_seg)
+		if (i == n_seg - 1)
 			pos_to = file_len - 1;
 
 		k = 0;
 		for (j = 0; j < array_size; j++) {
 			/* Find decay rates < -25 dB */
-			if (dr[j] < -25) {
+			if (dr[j] < -25.0) {
 				/* Does decay rate occur in this chunk? */
 				if (store_start[j] >= pos_from && 
 						store_end[j] < pos_to) {
-					printf("DEBUG: start optimum_model\n");
+					printf("DR: %lf\n", dr[j]);
 					optimum_model(a[j], b[j], alpha[j], dr[j],
 							samp, n_chan, 
 							&chan[k][0]);
@@ -343,7 +338,7 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 		if (k <= 0)
 			return 0;
 
-		printf("DEBUG: start optimum_model_2\n");
+		printf("DEBUG: start optimum_model_2: %d\n", k);
 		optimum_model_2(&chan[0][0], n_chan, k, samp, chan_opt);
 
 		/* Get cumulative sum and max value */
@@ -632,7 +627,6 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int samp_freq, const uint8_t **wav_data, int band, int *resamp_frms) {
 	uint8_t *output_data;
 	int ret, resamp_frames;
-	float *x;
 
 	resamp_frames = av_rescale_rnd(swr_get_delay(resamp, in_rate) + 
 		num_frames, samp_freq, in_rate, AV_ROUND_UP);
@@ -807,7 +801,7 @@ int ** apply_polyfit(float samp_freq, int resamp_frames, float *env, int *s_e_si
 	int **seg_index, invalid_coeff = 0, actual_seg_num_els = 0, max = 0;
 	int **start_end; 
 	float *poly_param, **poly_res, *poly_seg, max_poly_res, min_poly_res;
-	float *store, *var;
+	float *var;
 	float *log_env = calloc(resamp_frames, sizeof(float));
 	//FIXME: add calloc NULL check
 
@@ -824,7 +818,6 @@ int ** apply_polyfit(float samp_freq, int resamp_frames, float *env, int *s_e_si
 	poly_param = calloc(seg_size, sizeof(float));
 	poly_res = calloc(num_segs, sizeof(float *));
 	poly_seg = calloc(seg_size, sizeof(float));
-	store = calloc(num_segs, sizeof(float));
 	var = calloc(num_segs, sizeof(float));
 
 	for (i = 0; i < num_segs; i++) 
@@ -855,9 +848,6 @@ int ** apply_polyfit(float samp_freq, int resamp_frames, float *env, int *s_e_si
 //				printf("\n");
 //		}
 
-		store[i] = 6.91 / (resamp_frames * 
-			logf(powf(10.0, -poly_res[i][0])));
-
 		for (j = 0; j < poly_coeff; j++) {
 			//FIXME eeeh floating point comparisons are DODGEY in C
 			if (poly_res[i][j] < min_poly_res || 
@@ -866,7 +856,6 @@ int ** apply_polyfit(float samp_freq, int resamp_frames, float *env, int *s_e_si
 			}
 		}
 		if (invalid_coeff  == poly_coeff) {
-			store[i] = 0.0;
 			var[i] = -1.0;
 			dump++;
 		}
@@ -907,7 +896,6 @@ int ** apply_polyfit(float samp_freq, int resamp_frames, float *env, int *s_e_si
 	
 	free(poly_seg);
 	free(poly_res);
-	free(store);
 	free(var);
 	free(poly_param);
 	free(log_env);
@@ -1034,11 +1022,11 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 		store_end[i] = start_end[0][i] + max_abs_filt_seg + 
 				len_store[i] - 1;
 
+#if 0
 		/* ML fitting of decay model to the data */
 		ret = ml_fit(seg_seg2, len_store[i], (float) samp_freq, 
 			fabs(seg_seg2[k]), &a_par[i], &b_par[i], &alpha[i]);
 
-#if 0
                 /* DEBUG: using matlab values to test */
                 if (i == 0) {
                         a_par[i] = 0.999885193054;
@@ -1062,6 +1050,416 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
                 }
                 /*******************************/
 #endif
+                if (i == 0) {
+                        a_par[i] = 0.999094589804397;
+                        b_par[i] = 0.994872826187869;
+                        alpha[i] = 1.000000000000000;
+                }
+                if (i == 1) {
+                        a_par[i] = 0.999180097014578;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 0.212695672167877;
+                }
+                if (i == 2) {
+                        a_par[i] = 0.999713323430732;
+                        b_par[i] = 0.996342970347192;
+                        alpha[i] = 0.374014803581545;
+                }
+                if (i == 3) {
+                        a_par[i] = 0.999687612639516;
+                        b_par[i] = 0.995605995258264;
+                        alpha[i] = 0.091897918866414;
+                }
+                if (i == 4) {
+                        a_par[i] = 0.994711785713134;
+                        b_par[i] = 0.999024970844051;
+                        alpha[i] = 0.0;
+                }
+                if (i == 5) {
+                        a_par[i] = 0.995043336608471;
+                        b_par[i] = 0.998847922767537;
+                        alpha[i] = 0.0;
+                }
+                if (i == 6) {
+                        a_par[i] = 0.994394826394472;
+                        b_par[i] = 0.999019876183459;
+                        alpha[i] = 0.0;
+                }
+                if (i == 7) {
+                        a_par[i] = 0.999791266550412;
+                        b_par[i] = 0.998029286558849;
+                        alpha[i] = 0.696376397046217;
+                }
+                if (i == 8) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999509030932049;
+                        alpha[i] = 0.0;
+                }
+                if (i == 9) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.999272637030537;
+                        alpha[i] = 0.064216596905715;
+                }
+                if (i == 10) {
+                        a_par[i] = 0.994031236911420;
+                        b_par[i] = 0.999211181903717;
+                        alpha[i] = 0.864570140222733;
+                }
+                if (i == 11) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.999339657895692;
+                        alpha[i] = 0.225343158000227;
+                }
+                if (i == 12) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999494985340351;
+                        alpha[i] = 0.319145306059731;
+                }
+                if (i == 13) {
+                        a_par[i] = 0.999078051623354;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 1.000000000000000;
+                }
+                if (i == 14) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.998898257531995;
+                        alpha[i] = 0.496185978717731;
+                }
+                if (i == 15) {
+                        a_par[i] = 0.998182309046916;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.906716469849577;
+                }
+                if (i == 16) {
+                        a_par[i] = 0.996974645165489;
+                        b_par[i] = 0.999072395847762;
+                        alpha[i] = 0.712963359594970;
+                }
+                if (i == 17) {
+                        a_par[i] = 0.997944971151486;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.943110682342377;
+                }
+                if (i == 18) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.998357932928653;
+                        alpha[i] = 0.140224235031150;
+                }
+                if (i == 19) {
+                        a_par[i] = 0.999433444880068;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 0.376218010146496;
+                }
+                if (i == 20) {
+                        a_par[i] = 0.999567015115998;
+                        b_par[i] = 0.994720278601704;
+                        alpha[i] = 0.144445669562915;
+                }
+                if (i == 21) {
+                        a_par[i] = 0.999533092883626;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 0.104621032127595;
+                }
+                if (i == 22) {
+                        a_par[i] = 0.999251569288705;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 0.172358075776195;
+                }
+                if (i == 23) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.998505804013255;
+                        alpha[i] = 0.204383717664616;
+                }
+                if (i == 24) {
+                        a_par[i] = 0.999433757942988;
+                        b_par[i] = 0.994753977287462;
+                        alpha[i] = 0.147747268686187;
+                }
+                if (i == 25) {
+                        a_par[i] = 0.999158814183372;
+                        b_par[i] = 0.995120948211300;
+                        alpha[i] = 0.175261597302704;
+                }
+                if (i == 26) {
+                        a_par[i] = 0.994708516594345;
+                        b_par[i] = 0.998819933198468;
+                        alpha[i] = 0.0;
+                }
+                if (i == 27) {
+                        a_par[i] = 0.994142863363533;
+                        b_par[i] = 0.999114614982346;
+                        alpha[i] = -0.0;
+                }
+                if (i == 28) {
+                        a_par[i] = 0.995798702641769;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.716848019811558;
+                }
+                if (i == 29) {
+                        a_par[i] = 0.999495177542700;
+                        b_par[i] = 0.997492620171249;
+                        alpha[i] = 0.098172655772365;
+                }
+                if (i == 30) {
+                        a_par[i] = 0.999255466614124;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 0.164653437368793;
+                }
+                if (i == 31) {
+                        a_par[i] = 0.999627093659115;
+                        b_par[i] = 0.997675558319822;
+                        alpha[i] = 0.105743555931733;
+                }
+                if (i == 32) {
+                        a_par[i] = 0.997746778185184;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.789756778534100;
+                }
+                if (i == 33) {
+                        a_par[i] = 0.999417503812517;
+                        b_par[i] = 0.999384258506497;
+                        alpha[i] = 0.0;
+                }
+                if (i == 34) {
+                        a_par[i] = 0.994566864788402;
+                        b_par[i] = 0.999825342989669;
+                        alpha[i] = 0.920800340297833;
+                }
+                if (i == 35) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.684330132699412;
+                }
+                if (i == 36) {
+                        a_par[i] = 0.999161897452354;
+                        b_par[i] = 0.999161900460670;
+                        alpha[i] = 0.539573163424888;
+                }
+                if (i == 37) {
+                        a_par[i] = 0.999780374941031;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 0.589498800657416;
+                }
+                if (i == 38) {
+                        a_par[i] = 0.999890062058455;
+                        b_par[i] = 0.999389970934506;
+                        alpha[i] = 0.0;
+                }
+                if (i == 39) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.995706384699949;
+                        alpha[i] = 0.533102880748713;
+                }
+                if (i == 40) {
+                        a_par[i] = 0.997568226638431;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.874103377870471;
+                }
+                if (i == 41) {
+                        a_par[i] = 0.990857493470198;
+                        b_par[i] = 0.999799701598015;
+                        alpha[i] = 0.799692841907514;
+                }
+                if (i == 42) {
+                        a_par[i] = 0.999247828449652;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 0.538917883798136;
+                }
+                if (i == 43) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.998633369316183;
+                        alpha[i] = 0.228572794714481;
+                }
+                if (i == 44) {
+                        a_par[i] = 0.998995686598252;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 0.705943149406000;
+                }
+                if (i == 45) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.993488253215005;
+                        alpha[i] = 0.332440637310982;
+                }
+                if (i == 46) {
+                        a_par[i] = 0.999065049707584;
+                        b_par[i] = 0.999064780161723;
+                        alpha[i] = 0.306655707655123;
+                }
+                if (i == 47) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.992209081841129;
+                        alpha[i] = 0.080058153911342;
+                }
+                if (i == 48) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999584857043679;
+                        alpha[i] = 0.649346441588718;
+                }
+                if (i == 49) {
+                        a_par[i] = 0.998270626706036;
+                        b_par[i] = 0.998270692767028;
+                        alpha[i] = 0.904538450398288;
+                }
+                if (i == 50) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 0.197876688359996;
+                }
+                if (i == 51) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999632236731992;
+                        alpha[i] = 0.545485077299886;
+                }
+                if (i == 52) {
+                        a_par[i] = 0.999979997411215;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 0.953197444323481;
+                }
+                if (i == 53) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 0.329032231385471;
+                }
+                if (i == 54) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 1.000000000000000;
+                }
+                if (i == 55) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.653258304572190;
+                }
+                if (i == 56) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 1.000000000000000;
+                }
+                if (i == 57) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.452280924341951;
+                }
+                if (i == 58) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 0.154125300792170;
+                }
+                if (i == 59) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 1.000000000000000;
+                }
+                if (i == 60) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.607410603268955;
+                }
+                if (i == 61) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.662868111795531;
+                }
+                if (i == 62) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999009381240013;
+                        alpha[i] = 0.229121004431434;
+                }
+                if (i == 63) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 1.000000000000000;
+                }
+                if (i == 64) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.491347573920274;
+                }
+                if (i == 65) {
+                        a_par[i] = 0.999822132974474;
+                        b_par[i] = 0.999320103776189;
+                        alpha[i] = 1.000000000000000;
+                }
+                if (i == 66) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 0.633637992072218;
+                }
+                if (i == 67) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 0.616438010912253;
+                }
+                if (i == 68) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 0.155730142294404;
+                }
+                if (i == 69) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.521850366173101;
+                }
+                if (i == 70) {
+                        a_par[i] = 0.999183098782412;
+                        b_par[i] = 0.990045486335074;
+                        alpha[i] = 1.000000000000000;
+                }
+                if (i == 71) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999255589697719;
+                        alpha[i] = 0.583290771847080;
+                }
+                if (i == 72) {
+                        a_par[i] = 0.997895948312226;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.442090008013401;
+                }
+                if (i == 73) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.077965525936381;
+                }
+                if (i == 74) {
+                        a_par[i] = 0.997895948312226;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.442090008013401;
+                }
+                if (i == 75) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 1.000000000000000;
+                }
+                if (i == 76) {
+                        a_par[i] = 0.999990000000000;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 1.000000000000000;
+                }
+                if (i == 77) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999677231235847;
+                        alpha[i] = 0.361290517355847;
+                }
+                if (i == 78) {
+                        a_par[i] = 0.997614552490232;
+                        b_par[i] = 0.990000000000000;
+                        alpha[i] = 1.000000000000000;
+                }
+                if (i == 79) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999969121708210;
+                        alpha[i] = 0.106665611482328;
+                }
+                if (i == 80) {
+                        a_par[i] = 0.990000000000000;
+                        b_par[i] = 0.999677231235847;
+                        alpha[i] = 0.361290517355847;
+                }
+                if (i == 81) {
+                        a_par[i] = 0.997462545276869;
+                        b_par[i] = 0.999990000000000;
+                        alpha[i] = 0.931579173775712;
+		}
 
 		/* FIXME: use ret to check for error */
 		/* FIXME: fix all error cases - clean exit and all that */
@@ -1089,6 +1487,7 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 			y[j] = 10.0 * log10(y[j] / max_y);
 
 		dr[i] = y[len_store[i]];	
+		printf("DEUBG DR %d: %lf\n",i, dr[i]);
 
 		/* Reset to zero b/c arrays are longer than they need to be */
 		memset(segment, 0, sz * sizeof(float));
