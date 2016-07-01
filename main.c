@@ -51,7 +51,7 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 	double *rt_sd);
 int optimum_model(double a, double b, double alpha, double dr, int samp, int n,
 	double *chan_2);
-int optimum_model_2(double *chan, int n, int chan_sz, int samp, double *lin);
+int optimum_model_2(double **chan, int n, int chan_sz, int samp, double *lin);
 void hanning(int len, double *hann);
 int process_wav_data(int band, float *wav_data, SF_INFO input_info, 
 	SNDFILE *input, unsigned long long frames, double **p_alpha,
@@ -161,7 +161,8 @@ int main(void)
 	if (ret < 0) {
 		printf("Error returned during calculations...\n");
 		return -1;
-	}
+	} else
+		printf("Success! Exiting...\n");
 
 	return 0;
 }
@@ -172,7 +173,7 @@ int get_wav_data(void) {
 	float *wav_data;
 	unsigned long long long_ret = 0;	
 	int *len, *store_start, *store_end;
-	int band, i, j, array_size, n_seg, seg_len_n, ret = 0;
+	int band, array_size, ret = 0;
 	double *a, *b, *alpha, *dr, mean_rt, rt_sd;
 
 	/* Create arrays large enough to store values */
@@ -263,9 +264,9 @@ int get_wav_data(void) {
 	}
 
 
-	/* Clean up */	
+	/* Clean up */
+//	sf_close(input);
 	free(wav_data);
-	sf_close(input);
 	return ret;
 }
 
@@ -316,7 +317,7 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 
 		/* In case of partial chunk */
 		if (i == n_seg - 1)
-			pos_to = file_len - 1;
+			pos_to = file_len;
 
 		k = 0;
 		for (j = 0; j < array_size; j++) {
@@ -339,7 +340,7 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 			return 0;
 
 		printf("DEBUG: start optimum_model_2: %d\n", k);
-		optimum_model_2(&chan[0][0], n_chan, k, samp, chan_opt);
+		optimum_model_2(chan, n_chan, k, samp, chan_opt);
 
 		/* Get cumulative sum and max value */
 		chan_opt_log[n_chan - 1] = pow(chan_opt[n_chan - 1], 2);
@@ -453,13 +454,13 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 
 int optimum_model(double a, double b, double alpha, double dr, int samp, int n,
 		double *chan_2) {
-	int i, max;
-	double a_pow[n], b_pow[n];
+	int i;
+	double a_pow, b_pow, max;
 
 	for (i = 0; i < n; i++) {
-		a_pow[i] = pow(a, i);
-		b_pow[i] = pow(b, i);
-		chan_2[i] = alpha * a_pow[i] + (1 - alpha) * b_pow[i];
+		a_pow = pow(a, i);
+		b_pow = pow(b, i);
+		chan_2[i] = alpha * a_pow + (1 - alpha) * b_pow;
 
 		if (i == 0)
 			max = fabs(chan_2[i]);
@@ -470,13 +471,13 @@ int optimum_model(double a, double b, double alpha, double dr, int samp, int n,
 	}
 
 	for (i = 0; i < n; i++)
-		chan_2[i] = chan_2[i] / max;
+		chan_2[i] /= max;
 
 	return 0;
 }
 
 
-int optimum_model_2(double *chan, int n, int chan_sz, int samp, double *lin) {
+int optimum_model_2(double **chan, int n, int chan_sz, int samp, double *lin) {
 	double winn = 0.1;
 	double over = 0.5;
 	int nn = winn * samp;
@@ -487,13 +488,13 @@ int optimum_model_2(double *chan, int n, int chan_sz, int samp, double *lin) {
 	double win[nn * n_sect];
 
 	for (i = 0, n1 = 0; i < n_sect; i++) {
-		n2 = n1 + nn;
-		l_reg = n2 - n1;
+		n2 = n1 + nn - 1;
+		l_reg = n2 - n1 + 1;
 
 		for (j = 0; j < chan_sz; j++) {
 			chan_sum[j] = 0;
 			for (k = n1; k < n2; k++) 
-				chan_sum[j] += pow(*((chan + j * n) + k), 2); 
+				chan_sum[j] += pow(chan[j][k], 2);
 
 			/* Get the minimum */
 			if (j == 0) {
@@ -508,12 +509,14 @@ int optimum_model_2(double *chan, int n, int chan_sz, int samp, double *lin) {
 			}
 		}
 
+		// DEBUG note: min and min_index match matlab 250 Hz
+
 		if (i == 0) {
 			for (k = 0; k < n; k++) {
 				if (k >= n1 && k < n2)
-					lin[k] = *((chan + min_index * n) + k);
+					lin[k] = chan[min_index][k];
 
-				last[k] = *((chan + min_index * n) + k);
+				last[k] = chan[min_index][k];
 			}
 		} else {
 			hanning(l_reg, win);
@@ -523,16 +526,16 @@ int optimum_model_2(double *chan, int n, int chan_sz, int samp, double *lin) {
 
 			for (k = 0; k < n; k++) {
 				if (k >= n1 && k < n2) {
-					lin[k] = last[k] * abs(win[k] - 1.0) + 
-						*((chan + min_index * n) + k) * 
-						win[k];
+					lin[k] = last[k] * fabs(win[k] - 1.0) +
+						chan[min_index][k] * win[k];
 				}
 
-				last[k] = *((chan + min_index * n) + k);
+				last[k] = chan[min_index][k];
 			}
 		}	
 		n1 += n0;
 	}
+	//DEBUG note: lin[0-9] matches MATLAB
 
 	return 0;
 }
@@ -586,6 +589,7 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 		&resamp_frames);
 
 	if (resamp_frames <= 0 || resampled_wav == NULL) {
+		printf("Resample error\nExiting...\n");
 		free(wav_data);
 		sf_close(input);
 		return -1;
