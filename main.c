@@ -42,7 +42,7 @@
 #define SQP_STEP	5
 
 #define SEG_LEN		3 * 60		/* 3 minutes */
-#define RT_DECAY	35		/* 25 = T25 decay; 35 = T35 decay */
+#define RT_DECAY	25		/* 25 = T25 decay; 35 = T35 decay */
 
 /* Functions */
 int get_wav_data(void);
@@ -277,8 +277,8 @@ int get_wav_data(void) {
 int compute_rt(int samp, int array_size, int *store_start, int *store_end, 
 		double *dr, double *a, double *b, double *alpha, 
 		double *mean_rt, double *rt_sd) {
-	int n_seg, file_len, pos_to, pos_from, seg_len_n, i, j, k, l_reg;
-	int min_5dB_index, min_rtdB_index;
+	int n_seg, file_len, pos_to, pos_from, seg_len_n, i, j, k, l_reg, ret_sz;
+	int min_5dB_index, min_rtdB_index, nan_count = 0;
 	int n_chan = 4 * samp;
 	double **chan, chan_opt[n_chan], chan_opt_log[n_chan];
 	double *sd_rev_time, max, min_5dB, min_rtdB, **mat_a;
@@ -340,36 +340,45 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 			return 0;
 
 		printf("DEBUG: start optimum_model_2: %d\n", k);
-		optimum_model_2(chan, n_chan, k, samp, chan_opt);
+		ret_sz = optimum_model_2(chan, n_chan, k, samp, chan_opt);
 
-		/* Get cumulative sum and max value */
-		chan_opt_log[n_chan - 1] = pow(chan_opt[n_chan - 1], 2);
-		max = abs(chan_opt_log[n_chan - 1]);
-		for (j = n_chan - 2; j >= 0; j--) {
-			chan_opt_log[j] = pow(chan_opt[j], 2) + chan_opt_log[j+1];
-
-			if (abs(chan_opt_log[j]) > max)
-				max = abs(chan_opt_log[j]); 
+		/* Get cumulative sum */
+		chan_opt_log[ret_sz - 1] = pow(chan_opt[ret_sz - 1], 2);
+		for (j = ret_sz - 2; j >= 0; j--) {
+			chan_opt_log[j] = pow(chan_opt[j], 2) +
+				chan_opt_log[j + 1];
 		}
 
-		for (j = 0; j < n_chan; j++) {
+		// DEBUG note: chan_opt_log[0] close to matlab
+
+		/* Get max before getting log */
+		max = fabs(chan_opt_log[0]);
+		for (j = 1; j < ret_sz; j++) {
+			if (fabs(chan_opt_log[j]) > max)
+				max = fabs(chan_opt_log[j]);
+		}
+
+		for (j = 0; j < ret_sz; j++) {
 			/* Convert to decibels */
 			chan_opt_log[j] = 10 * log10(chan_opt_log[j] / max);
 
+			if (j < 10)
+				printf("CHANOPTLOG %d: %lf\n", j, chan_opt_log[j]);
+
 			/* Find -5 dB and -RT_DECAY dB decay points */
 			if (j == 0) {
-				min_5dB = abs(chan_opt_log[0] - (-5));
-				min_rtdB = abs(chan_opt_log[0] - (-RT_DECAY));
+				min_5dB = fabs(chan_opt_log[0] - (-5));
+				min_rtdB = fabs(chan_opt_log[0] - (-RT_DECAY));
 				min_5dB_index = 0;
 				min_rtdB_index = 0;
 			} else {
-				if (abs(chan_opt_log[j] - (-5)) < min_5dB) {
-					min_5dB = abs(chan_opt_log[j] - (-5));
+				if (fabs(chan_opt_log[j] - (-5)) < min_5dB) {
+					min_5dB = fabs(chan_opt_log[j] - (-5));
 					min_5dB_index = j;
 				}
 
-				if (abs(chan_opt_log[j] -(-RT_DECAY)) < min_rtdB) {
-					min_rtdB = abs(chan_opt_log[j] - 
+				if (fabs(chan_opt_log[j]-(-RT_DECAY)) < min_rtdB) {
+					min_rtdB = fabs(chan_opt_log[j] -
 						(-RT_DECAY));
 					min_rtdB_index = j;
 				}
@@ -383,9 +392,9 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 			mat_a[k] = calloc(l_reg, sizeof(double));
 
 		/* Get the RT */
-		for (j = min_5dB_index; j <= min_rtdB_index; j++) {
-			mat_a[j][0] = 1.0;
-			mat_a[j][1] = (double)j;
+		for (j = 0; j < l_reg; j++) {
+			mat_a[0][j] = 1.0;
+			mat_a[1][j] = (double) (min_5dB_index + j);
 		}
 
 		/* Get the SVD of mat_a */
@@ -406,31 +415,33 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 
 		/* Matrix multiplcation of modified V with U */
 		for (j = 0; j < l_reg; j++) {
-			mat_a[j][0] = svd_mat->Ut->value[0][j] *
+			mat_a[0][j] = svd_mat->Ut->value[0][j] *
 				svd_mat->Vt->value[0][0];
 
-			mat_a[j][1] = svd_mat->Ut->value[1][j] * 
+			mat_a[1][j] = svd_mat->Ut->value[1][j] *
 				svd_mat->Vt->value[1][1];
 
-			mat_a[j][0] += svd_mat->Ut->value[1][j] *
+			mat_a[0][j] += svd_mat->Ut->value[1][j] *
 					svd_mat->Vt->value[1][0];
 
-			mat_a[j][1] += svd_mat->Ut->value[0][j] *
+			mat_a[1][j] += svd_mat->Ut->value[0][j] *
 					svd_mat->Vt->value[0][1];
         	}
+		printf("Foo\n");
 
 		/* Multiply pseudoinverse by sig */
-		for (k = 0; k < l_reg; k++)
-			for (j = 0; j < 2; j++)
-				mat_a[k][j] *= chan_opt_log[k + min_5dB_index];
+		for (k = 0; k < 2; k++)
+			for (j = 0; j < l_reg; j++)
+				mat_a[k][j] *= chan_opt_log[j + min_5dB_index];
 
 		/* 
 		 * If RT for segment != nan, add to rev_time
 		 */
 		if(!isnan(-60.0 / (samp * mat_a[1][0]))) {
 			*mean_rt += -60.0 / (samp * mat_a[1][0]);
-			sd_rev_time[i] = -60.0 / (samp * mat_a[1][0]);
-		}
+			sd_rev_time[i - nan_count] = -60.0 / (samp * mat_a[1][0]);
+		} else
+			nan_count++;
 
 		/* Free array */
 		for (k = 0; k < 2; k++)
@@ -438,12 +449,12 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 	}
 
 	/* Get mean RT and standard dev of RT */
-	*mean_rt /= n_seg;
+	*mean_rt /= (n_seg - nan_count);
 
-	for (i = 0; i < n_seg; i++) 
-		*rt_sd = pow(abs(sd_rev_time[i] - *mean_rt),2);
+	for (i = 0; i < n_seg - nan_count; i++)
+		*rt_sd = pow(fabs(sd_rev_time[i] - *mean_rt), 2);
 
-	*rt_sd = sqrt(*rt_sd / (n_seg - 1));
+	*rt_sd = sqrt(*rt_sd / (n_seg - nan_count - 1));
 
 	/* Free array */
 	free(mat_a);
@@ -488,8 +499,8 @@ int optimum_model_2(double **chan, int n, int chan_sz, int samp, double *lin) {
 	double win[nn * n_sect];
 
 	for (i = 0, n1 = 0; i < n_sect; i++) {
-		n2 = n1 + nn - 1;
-		l_reg = n2 - n1 + 1;
+		n2 = n1 + nn;
+		l_reg = n2 - n1;
 
 		for (j = 0; j < chan_sz; j++) {
 			chan_sum[j] = 0;
@@ -537,7 +548,7 @@ int optimum_model_2(double **chan, int n, int chan_sz, int samp, double *lin) {
 	}
 	//DEBUG note: lin[0-9] matches MATLAB
 
-	return 0;
+	return (int) n2;
 }
 
 void hanning(int len, double *hann) {
