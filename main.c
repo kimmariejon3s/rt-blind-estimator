@@ -281,11 +281,17 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 	int min_5dB_index, min_rtdB_index, nan_count = 0;
 	int n_chan = 4 * samp;
 	double **chan, chan_opt[n_chan], chan_opt_log[n_chan];
-	double *sd_rev_time, max, min_5dB, min_rtdB, **mat_a;
-	SVDRec svd_mat = malloc(sizeof(SVDRec));
-	DMat dmat_a_mat = malloc(sizeof(DMat));
+	double *sd_rev_time, max, min_5dB, min_rtdB, **mat_a, mat_a_mul[2] = {0};
 
-	mat_a = calloc(2, sizeof(double *));
+	/* SVDLIBC stuff */
+	SVDRec svd_mat = svdNewSVDRec();
+	DMat dmat_a_mat;
+	SVDVerbosity = 0;	/* 1: normal verbosity; 3: very verbose */
+
+	/* Initialise */
+	*mean_rt = 0.0;
+	*rt_sd = 0.0;
+
 	chan = calloc(array_size, sizeof(double *));
 
 	for (i = 0; i < array_size; i++)
@@ -385,28 +391,36 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 			}
 		}
 
+		printf("MIN %d MAX %d\n", min_5dB_index, min_rtdB_index);
+
 		l_reg = min_rtdB_index - min_5dB_index + 1;
 
 		/* Allocate space for mat_a */
-		for (k = 0; k < 2; k++)
-			mat_a[k] = calloc(l_reg, sizeof(double));
+		mat_a = calloc(l_reg, sizeof(double *));
+		for (k = 0; k < l_reg; k++)
+			mat_a[k] = calloc(2, sizeof(double));
 
 		/* Get the RT */
+		/* Note: due to (possible bug?) in SVDLIBC, I need to normalise
+			the 2nd column of the matrix. I will multiply the RT
+			at the end to compensate for the normalisation */
 		for (j = 0; j < l_reg; j++) {
-			mat_a[0][j] = 1.0;
-			mat_a[1][j] = (double) (min_5dB_index + j);
+			mat_a[j][0] = 1.0;
+			mat_a[j][1] = ((double) (min_5dB_index + j)) /
+				min_rtdB_index;
 		}
 
 		/* Get the SVD of mat_a */
-		dmat_a_mat->rows = 2;
-		dmat_a_mat->cols = l_reg;
+		dmat_a_mat = svdNewDMat(l_reg, 2);
 		dmat_a_mat->value = mat_a;				
 
-		svd_mat = svdLAS2A(svdConvertDtoS(dmat_a_mat), 2);
+		svd_mat = svdLAS2A(svdConvertDtoS(dmat_a_mat), 0);
 
 		/* Get reciprocal of S */
-		for (k = 0; k < 2; k++)
+		for (k = 0; k < 2; k++) {
+			printf("S: %lf\n", svd_mat->S[k]);
 			svd_mat->S[k] = 1.0 / svd_mat->S[k];
+		}
 
 		/* Multiply modified S val by V */
 		for (k = 0; k < 2; k++)
@@ -415,46 +429,58 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 
 		/* Matrix multiplcation of modified V with U */
 		for (j = 0; j < l_reg; j++) {
-			mat_a[0][j] = svd_mat->Ut->value[0][j] *
+			mat_a[j][0] = svd_mat->Ut->value[0][j] *
 				svd_mat->Vt->value[0][0];
 
-			mat_a[1][j] = svd_mat->Ut->value[1][j] *
+			mat_a[j][1] = svd_mat->Ut->value[1][j] *
 				svd_mat->Vt->value[1][1];
 
-			mat_a[0][j] += svd_mat->Ut->value[1][j] *
+			mat_a[j][0] += svd_mat->Ut->value[1][j] *
 					svd_mat->Vt->value[1][0];
 
-			mat_a[1][j] += svd_mat->Ut->value[0][j] *
+			mat_a[j][1] += svd_mat->Ut->value[0][j] *
 					svd_mat->Vt->value[0][1];
+
+			// DEBUG: MATLAB matches output when same values are
+			//	passed to Matlab
+			if (j < 5)
+				printf("mat_a: %lf %lf\n", mat_a[j][0], mat_a[j][1]);
         	}
-		printf("Foo\n");
 
 		/* Multiply pseudoinverse by sig */
-		for (k = 0; k < 2; k++)
-			for (j = 0; j < l_reg; j++)
-				mat_a[k][j] *= chan_opt_log[j + min_5dB_index];
+		for (j = 0; j < l_reg; j++) {
+			mat_a_mul[0] += mat_a[j][0] *
+				chan_opt_log[j + min_5dB_index];
+			mat_a_mul[1] += mat_a[j][1] *
+				chan_opt_log[j + min_5dB_index];
+		}
 
 		/* 
 		 * If RT for segment != nan, add to rev_time
 		 */
-		if(!isnan(-60.0 / (samp * mat_a[1][0]))) {
-			*mean_rt += -60.0 / (samp * mat_a[1][0]);
-			sd_rev_time[i - nan_count] = -60.0 / (samp * mat_a[1][0]);
-		} else
-			nan_count++;
+		if(!isnan(-60.0 / (samp * mat_a_mul[1]))) {
+			sd_rev_time[i - nan_count] = ((double) (-60.0 *
+				min_rtdB_index)) / (samp * mat_a_mul[1]);
 
+			*mean_rt += sd_rev_time[i - nan_count];
+		} else {
+			nan_count++;
+			printf("nan: %d: count now %d\n", i, nan_count);
+		}
 		/* Free array */
-		for (k = 0; k < 2; k++)
+		for (k = 0; k < l_reg; k++)
 			free(mat_a[k]);
 	}
 
-	/* Get mean RT and standard dev of RT */
-	*mean_rt /= (n_seg - nan_count);
+	/* Get mean RT and standard dev of RT if num of valid RTs > 1 */
+	if (n_seg - nan_count > 1) {
+		*mean_rt /= (n_seg - nan_count);
 
-	for (i = 0; i < n_seg - nan_count; i++)
-		*rt_sd = pow(fabs(sd_rev_time[i] - *mean_rt), 2);
+		for (i = 0; i < n_seg - nan_count; i++)
+			*rt_sd = pow(fabs(sd_rev_time[i] - *mean_rt), 2);
 
-	*rt_sd = sqrt(*rt_sd / (n_seg - nan_count - 1));
+		*rt_sd = sqrt(*rt_sd / (n_seg - nan_count - 1));
+	}
 
 	/* Free array */
 	free(mat_a);

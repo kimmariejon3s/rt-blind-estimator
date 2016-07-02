@@ -62,8 +62,10 @@ int main(void) {
 		dmat_a_mat->value[j][1] += svd_mat->Ut->value[0][j] *
 				svd_mat->Vt->value[0][1];	
 
-		printf("%d,0: %lf\n", j, dmat_a_mat->value[j][0]);
-		printf("%d,1: %lf\n", j, dmat_a_mat->value[j][1]);
+		if (j < 5) {
+			printf("%d,0: %lf\n", j, dmat_a_mat->value[j][0]);
+			printf("%d,1: %lf\n", j, dmat_a_mat->value[j][1]);
+		}
 	}
 
 	return 0;
