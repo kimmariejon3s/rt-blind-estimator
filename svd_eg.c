@@ -2,9 +2,14 @@
 #include <stdlib.h>
 #include <svdlib.h>
 
-/* Values for 250 Hz, Bach wav */
+/* Values for 250 Hz, Bach wav, for Matlab and my code */
+#ifdef MATLAB
 #define MIN	78
-#define MAX 	2574	
+#define MAX 	2574
+#else
+#define MIN	131
+#define MAX	2381
+#endif	
 #define ROW 	MAX - MIN + 1 
 #define COL 	2		/* Fixed don't change!! */
 
