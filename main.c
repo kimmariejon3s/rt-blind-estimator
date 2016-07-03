@@ -71,8 +71,8 @@ int perform_ml(int **start_end, float *env, int s_e_size,
 	float *filtered_wav, int resamp_frames, int samp_freq,
 	double **p_alpha, double **p_a_par, double **p_b_par, double **p_dr,
 	int **p_len, int **p_start, int **p_end);
-int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg,
-	double *a_par, double *b_par, double *alph_par);
+int ml_fit(float *data_seg, int len, float samp_freq, double *a_par, 
+	double *b_par, double *alph_par);
 double alpha_opt(int n, const double *a, double *grad, void *nldv);
 double par_3_opt(int n, const double *a, double *grad, void *nldv);
 int plot_wav(float *wav_data, int channels, sf_count_t frames, int samprate);
@@ -211,15 +211,16 @@ int get_wav_data(void) {
 		return -1;
 	}
 
+	// DEBUG NB NB This should be inside loop if doing SPLITS
+	long_ret = sf_read_float(input, wav_data, 
+			floor(input_info.frames / SPLIT));
+
+	printf("DEBUG Read: %llu\n", long_ret);
 	/* Octave band filtering */
 	for (band = 2; band < 3; band++) {	
 
 		/* Single channel, so can call this way */
 	//	for (i = 0; i <= SPLIT; i++) {
-			long_ret = sf_read_float(input, wav_data, 
-					floor(input_info.frames / SPLIT));
-
-			printf("DEBUG Read: %llu\n", long_ret);
 
 
 #if 0
@@ -332,7 +333,7 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 				/* Does decay rate occur in this chunk? */
 				if (store_start[j] >= pos_from && 
 						store_end[j] < pos_to) {
-					printf("DR: %lf\n", dr[j]);
+					//printf("DR: %lf\n", dr[j]);
 					optimum_model(a[j], b[j], alpha[j], dr[j],
 							samp, n_chan, 
 							&chan[k][0]);
@@ -368,9 +369,6 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 			/* Convert to decibels */
 			chan_opt_log[j] = 10 * log10(chan_opt_log[j] / max);
 
-			if (j < 10)
-				printf("CHANOPTLOG %d: %lf\n", j, chan_opt_log[j]);
-
 			/* Find -5 dB and -RT_DECAY dB decay points */
 			if (j == 0) {
 				min_5dB = fabs(chan_opt_log[0] - (-5));
@@ -390,8 +388,6 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 				}
 			}
 		}
-
-		printf("MIN %d MAX %d\n", min_5dB_index, min_rtdB_index);
 
 		l_reg = min_rtdB_index - min_5dB_index + 1;
 
@@ -417,10 +413,8 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 		svd_mat = svdLAS2A(svdConvertDtoS(dmat_a_mat), 0);
 
 		/* Get reciprocal of S */
-		for (k = 0; k < 2; k++) {
-			printf("S: %lf\n", svd_mat->S[k]);
+		for (k = 0; k < 2; k++)
 			svd_mat->S[k] = 1.0 / svd_mat->S[k];
-		}
 
 		/* Multiply modified S val by V */
 		for (k = 0; k < 2; k++)
@@ -443,8 +437,6 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 
 			// DEBUG: MATLAB matches output when same values are
 			//	passed to Matlab
-			if (j < 5)
-				printf("mat_a: %lf %lf\n", mat_a[j][0], mat_a[j][1]);
         	}
 
 		/* Multiply pseudoinverse by sig */
@@ -463,10 +455,9 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 				min_rtdB_index)) / (samp * mat_a_mul[1]);
 
 			*mean_rt += sd_rev_time[i - nan_count];
-		} else {
+		} else
 			nan_count++;
-			printf("nan: %d: count now %d\n", i, nan_count);
-		}
+
 		/* Free array */
 		for (k = 0; k < l_reg; k++)
 			free(mat_a[k]);
@@ -619,6 +610,10 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 		return -1;
 	}
 
+	int i;
+	for (i = 0; i < 20; i++)
+		printf("WAV %d %le\n", i, wav_data[i]);
+
 	/* Resample the audio */
 	resampled_wav = resamp_wav_data(resamp, input_info.samplerate, 
 		(uint64_t) frames, samp_freq_per_band[band],
@@ -675,6 +670,8 @@ float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, in
 	ret = av_samples_alloc(&output_data, NULL, 1, resamp_frames, 
 		AV_SAMPLE_FMT_FLT, 0);
 
+	printf("ret: %d\n", ret);
+
 	if (ret < 0) {
 		printf("Output buffer alloc failure\nExiting...\n");
 		return NULL;
@@ -682,6 +679,8 @@ float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, in
 
 	resamp_frames = swr_convert(resamp, &output_data, resamp_frames,
 		wav_data, num_frames);
+
+	printf("RESAMP: %d\n", resamp_frames);
 
 	if (resamp_frames < 0) {
 		printf("Resampling failure\nExiting...\n");
@@ -998,9 +997,10 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 	double *y = calloc(6 * samp_freq, sizeof(double));
 	double max_y;
 
+
 	/* Get absolute vaule of filtered wav */
 	for (i = 0; i < resamp_frames; i++)
-		abs_filtered[i] = fabs(filtered_wav[i]);		
+		abs_filtered[i] = fabs(filtered_wav[i]);	
 
 	/* Largest possible size of arrays - first pair of elements */
 	sz = start_end[1][0] - start_end[0][0];
@@ -1063,34 +1063,12 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 		store_end[i] = start_end[0][i] + max_abs_filt_seg + 
 				len_store[i] - 1;
 
-#if 0
 		/* ML fitting of decay model to the data */
 		ret = ml_fit(seg_seg2, len_store[i], (float) samp_freq, 
-			fabs(seg_seg2[k]), &a_par[i], &b_par[i], &alpha[i]);
+			&a_par[i], &b_par[i], &alpha[i]);
+#if 0
 
-                /* DEBUG: using matlab values to test */
-                if (i == 0) {
-                        a_par[i] = 0.999885193054;
-                        b_par[i] = 0.995180243256;
-                        alpha[i] = 1.000000000000;
-                }
-                if (i == 1) {
-                        a_par[i] = 0.999878346327;
-                        b_par[i] = 0.990000000000;
-                        alpha[i] = 0.751467410761;
-                }
-                if (i == 2) {
-                        a_par[i] = 0.9998735051930;
-                        b_par[i] = 0.9900000000000;
-                        alpha[i] = 0.7863959195535;
-                }
-                if (i == 3) {
-                        a_par[i] = 0.999990000000;
-                        b_par[i] = 0.998207538979;
-                        alpha[i] = 0.667957424959;
-                }
-                /*******************************/
-#endif
+                /* DEBUG: using matlab values for Bach wav 250 Hz to test */
                 if (i == 0) {
                         a_par[i] = 0.999094589804397;
                         b_par[i] = 0.994872826187869;
@@ -1501,6 +1479,8 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
                         b_par[i] = 0.999990000000000;
                         alpha[i] = 0.931579173775712;
 		}
+                /*******************************/
+#endif
 
 		/* FIXME: use ret to check for error */
 		/* FIXME: fix all error cases - clean exit and all that */
@@ -1528,7 +1508,7 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 			y[j] = 10.0 * log10(y[j] / max_y);
 
 		dr[i] = y[len_store[i]];	
-		printf("DEUBG DR %d: %lf\n",i, dr[i]);
+		//printf("DEUBG DR %d: %lf\n",i, dr[i]);
 
 		/* Reset to zero b/c arrays are longer than they need to be */
 		memset(segment, 0, sz * sizeof(float));
@@ -1563,8 +1543,8 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 		return 0;
 }
 
-int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg,
-		double *a_par, double *b_par, double *alph_par) {
+int ml_fit(float *data_seg, int len, float samp_freq, double *a_par, 
+		double *b_par, double *alph_par) {
 	double min, max, interval, j, gmax_val, x_fine[3], fine_val;
 	double *coarse_grid, lb[3], ub[3];
 	double like[SQP_STEP][SQP_STEP] = {0}, alpha[SQP_STEP][SQP_STEP] = {0};
@@ -1590,7 +1570,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg,
 	max = (-6.91 / log(PAR_UP_BOUND)) / 3000.0;	
 	max = exp(-6.91 / (samp_freq * max));
 	
-	interval = (max - min) / ((float) SQP_STEP - 1.0);
+	interval = (max - min) / ((double) SQP_STEP - 1.0);
 	el_cg = round((max - min) / interval) + 1;
 	coarse_grid = calloc(el_cg, sizeof(double));
 
@@ -1599,10 +1579,8 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg,
 		coarse_grid[i] = j;
 
 	// There is another max(abs(x)) division here in MATLAB
-	// 	Makes no diff - dividing by 1.0
-	for (i = 0; i < len; i++) 
-		data_seg[i] /= max_abs_seg;
-
+	// 	Makes no diff - dividing by 1.0 - leaving out
+	
 	/* Coarse grid minimisation search */
 	for (i = 0; i < SQP_STEP; i++) {
 		nld.b_val = coarse_grid[i];
@@ -1629,7 +1607,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg,
 				}
 			}
 
-//			printf("k: %d, i: %d, ret: %d, a: %lf like: %le coarse: %lf\n", k+1, i+1, ret, alpha[k][i], like[k][i], coarse_grid[k]);
+			printf("k: %d, i: %d, ret: %d, a: %lf like: %le coarse: %lf\n", k+1, i+1, ret, alpha[k][i], like[k][i], coarse_grid[k]);
 		}
 	}
 
@@ -1650,7 +1628,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg,
 	nlopt_set_min_objective(nl_obj3, (nlopt_func) par_3_opt, (void *) &nld);
 
 #if 0
-	// DEBUG TEST W MATLAB VALS
+	// DEBUG TEST W MATLAB VALS 63 HZ
 	x_fine[0] = 0.999878346327187;
 	x_fine[1] = 0.990000000000000;
 	x_fine[2] = 0.751467410761228;
@@ -1663,11 +1641,11 @@ int ml_fit(float *data_seg, int len, float samp_freq, float max_abs_seg,
 	x_fine[0] = coarse_grid[gmax_pos[0]];
 	x_fine[1] = coarse_grid[gmax_pos[1]];
 	x_fine[2] = alpha[gmax_pos[0]][gmax_pos[1]];	
-	printf("B4 XVAL: %lf %lf %lf %le\n", x_fine[0], x_fine[1], x_fine[2], -gmax_val); 
+	printf("B4 XVAL: %lf %lf %lf %le\n", x_fine[0], x_fine[1], x_fine[2], gmax_val); 
 
 	ret |= nlopt_optimize(nl_obj3, x_fine, &fine_val);
-	//printf("ret: %d XVAL: %lf %lf %lf FINE_VAL: %le\n", ret, x_fine[0], 
-	//	x_fine[1], x_fine[2], fine_val);	
+	printf("ret: %d XVAL: %lf %lf %lf FINE_VAL: %le\n", ret, x_fine[0], 
+		x_fine[1], x_fine[2], fine_val);	
 	
 	/* Return a, b, alpha in pointers */
 	*a_par = x_fine[0];
