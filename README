@@ -11,12 +11,13 @@ just so that I remember what how to run it.
  
 To run the program, execute the following:
 export LD_LIBRARY_PATH=/usr/local/lib/
-gcc -o rt main.c ./kiss_fft130/kiss_fft.c -I/usr/include -L/usr/lib/x86_64-linux-gnu -lsndfile -L/usr/local/lib -lswresample -lavutil -lliquid -lnlopt -I./kiss_fft130 -lm -I/home/kim/SVDLIBC -L/home/kim/SVDLIBC -lsvd
+gcc -o rt main.c -I/usr/include -L/usr/lib/x86_64-linux-gnu -lsndfile -L/usr/local/lib -lswresample -lavutil -lliquid -lnlopt -lm -I/home/kim/SVDLIBC -L/home/kim/SVDLIBC -lsvd
 
 You can then run the program by executing:
 ./rt
 
 FUTURE PLANS
+Get it working properly.
+Make it user friendly.
 Make sure it works on Windows too.
 Make a GUI.
-Actually write a program implementing the algorithm......
