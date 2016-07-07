@@ -1,6 +1,12 @@
 /*****************************************************************************
 * This program allows the reverberation time of a venue to be determined
 * blindly, using a sample of music or speech that is recorded in the venue
+* C implementation of Paul Kendrick's Matlab algorithm:
+*
+* Kendrick, Paul, et al. "Blind estimation of reverberation parameters for
+* non-diffuse rooms." Acta Acustica united with Acustica 93.5 (2007): 760-770.
+*
+* C implementation by Kim Jones <K.Jones20@edu.salford.ac.uk>
 *****************************************************************************/
 
 #include <stdio.h>
@@ -147,8 +153,18 @@ int get_wav_data(void) {
 		input_info.frames, input_info.samplerate, input_info.channels, 
 		input_info.format, input_info.sections, input_info.seekable);
 
-	/* FIXME: insert check to make sure that the wav file is in the 
-	 *	expected format: mono and 16 bit signed??? */
+	/* Check to make sure that the wav file is in the expected format:
+		mono channel and 16 bit signed wav */
+	if ((input_info.format & 0xFF000F) != 0x10002 &&
+			(input_info.format & 0xFF000F) != 0x130002) {
+		printf("Program requires 16-bit signed wav.\nMake sure format "
+			"is 0x10002 or 0x130002.\nExiting...\n");
+		return 0;
+	}
+	if (input_info.channels != 1) {
+		printf("Input must be a single channel wav file. Exiting...\n");
+		return 0;
+	}
 
 	/* Store data in array */
 	wav_data = (float *) calloc(input_info.frames * input_info.channels 
