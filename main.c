@@ -14,14 +14,15 @@
 #include <libavcodec/avcodec.h>
 #include <liquid/liquid.h>
 #include <nlopt.h>
-#include "kiss_fft.h"
 #include <svdlib.h>
+#include "butter_params.h"
 
 //FIXME: make this 20 when I decide to do the split stuff
 #define SPLIT		1
 #define MAX_CHUNK_SIZE	1024 * 1024 * 1024
 #define WINDOW_WIDTH	0.5
 #define OVERLAP		0.98
+#define USE_HARD_BUTTER	1		/* Use butter_params.h if set */
 #define OCT_FILT_ORDER	5
 #define ENV_FILT_ORDER	4
 #define N_OCT 		OCT_FILT_ORDER * 2
@@ -59,7 +60,7 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 	int **p_end);
 float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, 
 	int samp_freq, const uint8_t **wav_data, int band, int *resamp_frms);
-float * oct_filt_data(float *output_data, float band, float samp_freq, 
+float * oct_filt_data(float *output_data, int band_num, float samp_freq,
 	int resamp_frames);
 float * get_envelope(float samp_freq, float *resampled_wav, 
 	int resamp_frames);
@@ -99,59 +100,6 @@ int samp_freq_per_band[] = {3000, 3000, 3000, 3000, 3000, 6000, 12000, 24000};
 	float butt_a[3 * (L_ENV + R_ENV)] = {0};
 #endif
 
-/* Parameters as calculated by matlab */
-#if 0
-// 63 hz
-float but_b[11] = {
-		0.0000019065480398620, 0, -0.0000095327401993098,
-		0, 0.0000190654803986197, 0, -0.0000190654803986197,
-		0, 0.0000095327401993098, 0, -0.0000019065480398620
-};
-float but_a[11] = {1.0000000000000, -9.6137442795514, 4.16762001930964, -107.2819840395506, 181.6014605265677, -211.2216382366775, 170.09536018279864};
-
-//250 Hz
-float but_b[11] = {
-   	0.000125964124667, 0, -0.000629820623333, 0, 0.001259641246665, 0, 		-0.001259641246665, 0, 0.000629820623333, 0, -0.000125964124667};
-
-float but_a[11] = {
-	1.000000000000000, -7.610710971362601, 27.056928005646160, 
-	-58.995953452911763, 87.229825526402408, -91.305190165139038, 
-	68.499525784864559, -36.381079989157115, 13.104095798414871, 
-	-2.895830250311406, 0.299189780176664};
-
-float butter_b[8][11] = {
-	{1.0e-05 * 0.0191, 0, 1.0e-05 * -0.0953, 0, 1.0e-05 * 0.1907, 0, 
-		1.0e-05 * -0.1907, 0, 1.0e-05 * 0.0953, 0, 1.0e-05 * -0.0191},
-	{1.0e-04 * 0.0511, 0, 1.0e-04 * -0.2553, 0, 1.0e-04 * 0.5105, 0, 
-		1.0e-04 * -0.5105, 0, 1.0e-04 * 0.2553, 0, 1.0e-04 * -0.0511},
-	{0.0001, 0, -0.0006, 0, 0.0013, 0, -0.0013, 0, 0.0006, 0, -0.0001},
-	{0.0026, 0, -0.0128, 0, 0.0257, 0, -0.0257, 0, 0.0128, 0, -0.0026},
-	{0.0419, 0, -0.2094, 0, 0.4189, 0, -0.4189, 0, 0.2094, 0, -0.0419},
-	{0.0419, 0, -0.2094, 0, 0.4189, 0, -0.4189, 0, 0.2094, 0, -0.0419},
-	{0.0419, 0, -0.2094, 0, 0.4189, 0, -0.4189, 0, 0.2094, 0, -0.0419},
-	{0.0419, 0, -0.2094, 0, 0.4189, 0, -0.4189, 0, 0.2094, 0, -0.0419}
-};
-float butter_a[8][11] = {
-	{1.0000, -9.6137, 41.6762, -107.2820, 181.6015, -211.2216, 170.9536, 
-		-95.0705, 34.7671, -7.5499, 0.7393},
-	{1.0000, -9.0799, 37.4091, -92.0798, 149.9398, -168.7663, 132.9719,
-		-72.4197, 26.0936, -5.6173, 0.5487},
-	{1.0000, -7.6107, 27.0569, -58.9960, 87.2298, -91.3052, 68.4995,
-		-36.3811, 13.1041, -2.8958, 0.2992},
-	{1.0000, -3.6281, 7.9585, -11.8968, 13.6277, -11.9992, 8.3692, -4.4707,
-		1.8221, -0.5004, 0.0848},
-	{1.0000, 4.3339, 8.2183, 9.6168, 8.4562, 5.9140, 3.0377, 1.0937,
-		0.3038, 0.0597, 0.0026},
-	{1.0000, 4.3339, 8.2183, 9.6168, 8.4562, 5.9140, 3.0377, 1.0937,
-                0.3038, 0.0597, 0.0026},
-	{1.0000, 4.3339, 8.2183, 9.6168, 8.4562, 5.9140, 3.0377, 1.0937,
-                0.3038, 0.0597, 0.0026},
-	{1.0000, 4.3339, 8.2183, 9.6168, 8.4562, 5.9140, 3.0377, 1.0937,
-                0.3038, 0.0597, 0.0026}
-};
-#endif
-
-
 int main(void)
 {
 	double ret;
@@ -188,8 +136,9 @@ int get_wav_data(void) {
 	/* Open file */
 	input_info.format = 0;
 	SNDFILE *input = 
-		sf_open("/home/kim/wav_samples/mono_bach_partita_e_maj.wav",
-		//sf_open("/home/kim/BlindRT/DS_Science_S6_L1.wav",
+		//sf_open("/home/kim/wav_samples/mono_bach_partita_e_maj.wav",
+		//sf_open("/home/kim/wav_samples/DS_Science_S6_L1_3000HZ.wav",
+		sf_open("/home/kim/BlindRT/DS_Science_S6_L1.wav",
 		SFM_READ, &input_info);
 
 	/* Print header data */
@@ -215,10 +164,10 @@ int get_wav_data(void) {
 	long_ret = sf_read_float(input, wav_data, 
 			floor(input_info.frames / SPLIT));
 
-	printf("DEBUG Read: %llu\n", long_ret);
 	/* Octave band filtering */
-	for (band = 2; band < 3; band++) {	
-
+	for (band = 0; band < 8; band++) {
+		printf("\n\nCalculations of Reverberation Time for %d Hz octave "
+			"band.\n", octave_bands[band]);
 		/* Single channel, so can call this way */
 	//	for (i = 0; i <= SPLIT; i++) {
 
@@ -237,11 +186,9 @@ int get_wav_data(void) {
 #endif
 
 			/* Process the wav data */
-			printf("DEBUG: Start process_wav_data\n");
 			ret = process_wav_data(band, wav_data, input_info, 
 				input, long_ret, &alpha, &a, &b, &dr, &len,
 				&store_start, &store_end);
-			printf("DEBUG: End process_wav_data\n");
 
 			/* If ret <= 0, error */
 			/* If > 0, ret is the size of the returned arrays */
@@ -254,7 +201,6 @@ int get_wav_data(void) {
 				
 			// SUM THE ARRAYS IF SPLIT
 
-			printf("DEBUG: Start compute_rt\n");
 			/* Compute the reverberation time (RT) */
 			ret = compute_rt(samp_freq_per_band[band],
 				array_size, store_start, store_end, dr, a, b,
@@ -281,8 +227,8 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 	int n_seg, file_len, pos_to, pos_from, seg_len_n, i, j, k, l_reg, ret_sz;
 	int min_5dB_index, min_rtdB_index, nan_count = 0;
 	int n_chan = 4 * samp;
-	double **chan, chan_opt[n_chan], chan_opt_log[n_chan];
-	double *sd_rev_time, max, min_5dB, min_rtdB, **mat_a, mat_a_mul[2] = {0};
+	double **chan, chan_opt[n_chan], chan_opt_log[n_chan], sd_tmp;
+	double *sd_rev_time, max, min_5dB, min_rtdB, **mat_a, mat_a_mul[2];
 
 	/* SVDLIBC stuff */
 	SVDRec svd_mat = svdNewSVDRec();
@@ -292,6 +238,8 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 	/* Initialise */
 	*mean_rt = 0.0;
 	*rt_sd = 0.0;
+
+	printf("computing the Reverberation Time...\n");
 
 	chan = calloc(array_size, sizeof(double *));
 
@@ -344,9 +292,8 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 		}
 
 		if (k <= 0)
-			return 0;
+			continue;
 
-		printf("DEBUG: start optimum_model_2: %d\n", k);
 		ret_sz = optimum_model_2(chan, n_chan, k, samp, chan_opt);
 
 		/* Get cumulative sum */
@@ -440,6 +387,8 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
         	}
 
 		/* Multiply pseudoinverse by sig */
+		mat_a_mul[0] = 0.0;
+		mat_a_mul[1] = 0.0;
 		for (j = 0; j < l_reg; j++) {
 			mat_a_mul[0] += mat_a[j][0] *
 				chan_opt_log[j + min_5dB_index];
@@ -461,20 +410,19 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 		/* Free array */
 		for (k = 0; k < l_reg; k++)
 			free(mat_a[k]);
+
+		free(mat_a);
 	}
 
 	/* Get mean RT and standard dev of RT if num of valid RTs > 1 */
 	if (n_seg - nan_count > 1) {
 		*mean_rt /= (n_seg - nan_count);
 
-		for (i = 0; i < n_seg - nan_count; i++)
-			*rt_sd = pow(fabs(sd_rev_time[i] - *mean_rt), 2);
+		for (sd_tmp = 0.0, i = 0; i < n_seg - nan_count; i++)
+			sd_tmp += pow(fabs(sd_rev_time[i] - *mean_rt), 2);
 
-		*rt_sd = sqrt(*rt_sd / (n_seg - nan_count - 1));
+		*rt_sd = sqrt(sd_tmp / (n_seg - nan_count - 1));
 	}
-
-	/* Free array */
-	free(mat_a);
 
 	return 0;
 }
@@ -586,8 +534,6 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 	double *alpha, *a, *b, *dr;
 	int *len, *store_start, *store_end;
 
-	printf("DEBUG: resample init\n");
-
 	/* Specifications that apply to all subbands */
 	SwrContext *resamp = swr_alloc();
 
@@ -610,11 +556,6 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 		return -1;
 	}
 
-	int i;
-	for (i = 0; i < 20; i++)
-		printf("WAV %d %le\n", i, wav_data[i]);
-
-	/* Resample the audio */
 	resampled_wav = resamp_wav_data(resamp, input_info.samplerate, 
 		(uint64_t) frames, samp_freq_per_band[band],
 		(const uint8_t **) &wav_data, octave_bands[band], 
@@ -626,10 +567,14 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 		sf_close(input);
 		return -1;
 	}
+	//DEBUG: comment above and uncomment these 2 if using 3000 Hz wav
+	// WARN: only works for lower oct bands!
+	//resampled_wav = wav_data;
+	//resamp_frames = frames;
 
 	/* Octave band filtering */
 	filtered_wav = oct_filt_data(resampled_wav, 
-		(float) octave_bands[band], (float) samp_freq_per_band[band],
+		band, (float) samp_freq_per_band[band],
 		resamp_frames);
 	
 	/* Obtain signal envelope */
@@ -644,6 +589,8 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 	ret = perform_ml(start_end, env, s_e_size, filtered_wav, 
 		resamp_frames, samp_freq_per_band[band], &alpha, &a, &b, &dr,
 		&len, &store_start, &store_end);
+
+	printf("Maximum Liklihood calculations have completed!\n");
 
 	/* Return pointers to caller */
 	*p_alpha = alpha;
@@ -664,13 +611,12 @@ float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, in
 	uint8_t *output_data;
 	int ret, resamp_frames;
 
+	printf("Resampling wav...\n");
 	resamp_frames = av_rescale_rnd(swr_get_delay(resamp, in_rate) + 
 		num_frames, samp_freq, in_rate, AV_ROUND_UP);
 
 	ret = av_samples_alloc(&output_data, NULL, 1, resamp_frames, 
 		AV_SAMPLE_FMT_FLT, 0);
-
-	printf("ret: %d\n", ret);
 
 	if (ret < 0) {
 		printf("Output buffer alloc failure\nExiting...\n");
@@ -680,14 +626,11 @@ float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, in
 	resamp_frames = swr_convert(resamp, &output_data, resamp_frames,
 		wav_data, num_frames);
 
-	printf("RESAMP: %d\n", resamp_frames);
-
 	if (resamp_frames < 0) {
 		printf("Resampling failure\nExiting...\n");
 		av_freep(&output_data);
 		return NULL;
 	}
-
 
 #if 0
 	/* Generate wav to check resampled data is not garbage */
@@ -714,32 +657,53 @@ float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, in
 	return (float *) output_data;
 }
 
-float * oct_filt_data(float *resamp_data, float band, float samp_freq, int resamp_frames) {
-	int i;
+float * oct_filt_data(float *resamp_data, int band_num, float samp_freq, int resamp_frames) {
+	int i, flag = 0;
 	float *filtered = calloc(resamp_frames, sizeof(float)); 
+	float band = octave_bands[band_num];
 
 	memset(butt_b, 0, sizeof(butt_b));
 	memset(butt_a, 0, sizeof(butt_a));
 
-	/* Create bandpass filter - 7th and 8th parameter are ignored */
-	liquid_iirdes(LIQUID_IIRDES_BUTTER, LIQUID_IIRDES_BANDPASS, 
-		LIQUID_IIRDES_SOS, OCT_FILT_ORDER, 
-		band / (sqrt(2.0) * samp_freq), 
-		band / samp_freq, 1.0, 1.0, butt_b, butt_a);
-	//printf("res: %d\n\n", iirdes_isstable(butt_b, butt_a, 3 * (L_OCT + R_OCT)));
+	printf("Applying octave band filter...\n");
 
-//	for (i=0; i<(3 * (L_OCT + R_OCT)); i++)
-//		printf("b: %f and a: %f\n", butt_b[i], butt_a[i]);		
+#ifdef USE_HARD_BUTTER
+	/* Only accurate when numbers are not tiny */
+	if (fabs(butter_b[band_num][0]) > 1e-5)
+		flag = 1;
+#endif
 
-	iirfilt_rrrf f_obj_oct = iirfilt_rrrf_create_sos(butt_b, butt_a, (L_OCT + R_OCT));
+	if (flag == 1) {
+		iirfilt_rrrf f_obj_oct1 = iirfilt_rrrf_create(
+			butter_b[band_num], 2 * OCT_FILT_ORDER + 1,
+			butter_a[band_num], 2 * OCT_FILT_ORDER + 1);
 
+		/* Filter data */
+		for (i = 0; i < resamp_frames; i++)
+			iirfilt_rrrf_execute(f_obj_oct1, resamp_data[i],
+				&filtered[i]);
 
-	/* Filter data */
-	for (i = 0; i < resamp_frames; i++) 
-		iirfilt_rrrf_execute(f_obj_oct, resamp_data[i], &filtered[i]);
+		/* Free filter and reset coefficient arrays */
+		iirfilt_rrrf_destroy(f_obj_oct1);
+	} else {
+		/* Create bandpass filter - 7th and 8th parameter are ignored */
+		liquid_iirdes(LIQUID_IIRDES_BUTTER, LIQUID_IIRDES_BANDPASS,
+			LIQUID_IIRDES_SOS, OCT_FILT_ORDER,
+			band / (sqrt(2.0) * samp_freq),
+			band / samp_freq, 1.0, 1.0, butt_b, butt_a);
+		//printf("res: %d\n\n", iirdes_isstable(butt_b, butt_a,
+		//	3 * (L_OCT + R_OCT)));
+		iirfilt_rrrf f_obj_oct2 = iirfilt_rrrf_create_sos(
+			butt_b, butt_a, L_OCT + R_OCT);
 
-	/* Free filter and reset coefficient arrays */
-	iirfilt_rrrf_destroy(f_obj_oct);
+		/* Filter data */
+		for (i = 0; i < resamp_frames; i++)
+			iirfilt_rrrf_execute(f_obj_oct2, resamp_data[i],
+				&filtered[i]);
+
+		/* Free filter and reset coefficient arrays */
+		iirfilt_rrrf_destroy(f_obj_oct2);
+	}
 
 	/* fiiltered data: return to previous function */
 	return filtered;
@@ -761,13 +725,14 @@ float * get_envelope(float samp_freq, float *filtered_wav,
 	memset(butt_a, 0, sizeof(butt_a));
 
 	/* Create Low Pass Filter - 6th, 7th and 8th param are ignored */
-	printf("DEBUG: Low pass filter and Hilbert transform\n");
+	printf("Obtaining signal envelope...\n");
 	liquid_iirdes(LIQUID_IIRDES_BUTTER, LIQUID_IIRDES_LOWPASS, 
-		LIQUID_IIRDES_SOS, ENV_FILT_ORDER, 
+		LIQUID_IIRDES_TF, ENV_FILT_ORDER,
 		LOW_PASS_CUTOFF / samp_freq, 0.1, 
 		1.0, 1.0, butt_b, butt_a);
 
-	iirfilt_crcf f_obj_env = iirfilt_crcf_create_sos(butt_b, butt_a, (L_ENV + R_ENV));
+	iirfilt_crcf f_obj_env = iirfilt_crcf_create(butt_b,
+		ENV_FILT_ORDER+1, butt_a, ENV_FILT_ORDER+1);
 
 	fftplan fft_pln = fft_create_plan(resamp_frames, (float complex *) 
 		filt_complex, (float complex *) tmp, LIQUID_FFT_FORWARD, 0);
@@ -776,7 +741,7 @@ float * get_envelope(float samp_freq, float *filtered_wav,
 
 	/* Get the Hilbert transform - really it's the analytic signal as the
 		Hilbert transform is stored in the imaginary part of the soln */
-	for (i = 0; i < resamp_frames; i+= 1)
+	for (i = 0; i < resamp_frames; i++)
 		filt_complex[i] = (float complex) filtered_wav[i];
 
 	fft_execute(fft_pln);	
@@ -816,9 +781,8 @@ float * get_envelope(float samp_freq, float *filtered_wav,
 
 		/* Apply low pass filter to envelope */
 		iirfilt_crcf_execute(f_obj_env, hilb[i], &tmp[i]);
+
 		env[i] = cabsf(tmp[i]);
-//		if (i < 100)
-//			printf("%d: %lf\n", i, env[i]);
 	}
 
 
@@ -844,6 +808,8 @@ int ** apply_polyfit(float samp_freq, int resamp_frames, float *env, int *s_e_si
 	float *var;
 	float *log_env = calloc(resamp_frames, sizeof(float));
 	//FIXME: add calloc NULL check
+
+	printf("Applying polyfit algorithm...\n");
 
 	for (i = 0; i < resamp_frames; i++)
 		log_env[i] = log10f(env[i]);
@@ -997,6 +963,8 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 	double *y = calloc(6 * samp_freq, sizeof(double));
 	double max_y;
 
+	printf("Performing Maximum Liklihood calculations\n"
+		"This will take a while...\n");
 
 	/* Get absolute vaule of filtered wav */
 	for (i = 0; i < resamp_frames; i++)
@@ -1607,7 +1575,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, double *a_par,
 				}
 			}
 
-			printf("k: %d, i: %d, ret: %d, a: %lf like: %le coarse: %lf\n", k+1, i+1, ret, alpha[k][i], like[k][i], coarse_grid[k]);
+	//		printf("k: %d, i: %d, ret: %d, a: %lf like: %le coarse: %lf\n", k+1, i+1, ret, alpha[k][i], like[k][i], coarse_grid[k]);
 		}
 	}
 
@@ -1641,11 +1609,11 @@ int ml_fit(float *data_seg, int len, float samp_freq, double *a_par,
 	x_fine[0] = coarse_grid[gmax_pos[0]];
 	x_fine[1] = coarse_grid[gmax_pos[1]];
 	x_fine[2] = alpha[gmax_pos[0]][gmax_pos[1]];	
-	printf("B4 XVAL: %lf %lf %lf %le\n", x_fine[0], x_fine[1], x_fine[2], gmax_val); 
+	//printf("B4 XVAL: %lf %lf %lf %le\n", x_fine[0], x_fine[1], x_fine[2], gmax_val); 
 
 	ret |= nlopt_optimize(nl_obj3, x_fine, &fine_val);
-	printf("ret: %d XVAL: %lf %lf %lf FINE_VAL: %le\n", ret, x_fine[0], 
-		x_fine[1], x_fine[2], fine_val);	
+	//printf("DEBUG FINE RESULTS - ret: %d XVAL: %lf %lf %lf FINE_VAL: %le\n", 
+		//ret, x_fine[0], x_fine[1], x_fine[2], fine_val);
 	
 	/* Return a, b, alpha in pointers */
 	*a_par = x_fine[0];
