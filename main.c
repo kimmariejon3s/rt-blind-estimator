@@ -24,7 +24,7 @@
 #include "butter_params.h"
 
 //FIXME: make this 20 when I decide to do the split stuff
-#define SPLIT		1
+#define SPLIT		20	
 #define MAX_CHUNK_SIZE	1024 * 1024 * 1024
 #define WINDOW_WIDTH	0.5
 #define OVERLAP		0.98
@@ -127,8 +127,10 @@ int get_wav_data(void) {
 	float *wav_data;
 	unsigned long long long_ret = 0;	
 	int *len, *store_start, *store_end;
-	int band, array_size, ret = 0;
+	int i, band, array_size, ret = 0;
+	int *start_tmp, *end_tmp;
 	double *a, *b, *alpha, *dr, mean_rt, rt_sd;
+	double *a_tmp, *b_tmp, *alpha_tmp, *dr_tmp;
 
 	/* Create arrays large enough to store values */
 	a = calloc(input_info.frames, sizeof(double));
@@ -138,6 +140,14 @@ int get_wav_data(void) {
 	len = calloc(input_info.frames, sizeof(int));
 	store_start = calloc(input_info.frames, sizeof(int));
 	store_end = calloc(input_info.frames, sizeof(int));
+
+	/* Have to do this because of the SPLIT */
+	a_tmp = &a[0];	
+	b_tmp = &a[0];
+	alpha_tmp = &alpha[0];
+	dr_tmp = &dr[0];
+	start_tmp = &store_start[0];	
+	end_tmp = &store_end[0];	
 
 	/* Open file */
 	input_info.format = 0;
@@ -167,8 +177,7 @@ int get_wav_data(void) {
 	}
 
 	/* Store data in array */
-	wav_data = (float *) calloc(input_info.frames * input_info.channels 
-		/ SPLIT, sizeof(float));
+	wav_data = (float *) calloc(input_info.frames / SPLIT, sizeof(float));
 
 	if (wav_data == NULL) {
 		printf("Memory allocation error\nExiting...\n");
@@ -176,35 +185,33 @@ int get_wav_data(void) {
 		return -1;
 	}
 
-	// DEBUG NB NB This should be inside loop if doing SPLITS
-	long_ret = sf_read_float(input, wav_data, 
-			floor(input_info.frames / SPLIT));
-
 	/* Octave band filtering */
 	for (band = 0; band < 8; band++) {
 		printf("\n\nCalculations of Reverberation Time for %d Hz octave "
 			"band.\n", octave_bands[band]);
-		/* Single channel, so can call this way */
-	//	for (i = 0; i <= SPLIT; i++) {
 
+		/* Single channel, so can call this way */
+		for (i = 0; i <= SPLIT; i++) {
+			long_ret = sf_read_float(input, wav_data, 
+					floor(input_info.frames / SPLIT));
 
 #if 0
-	/* Plot the wav with Gnuplot, for the craic */	
-	ret = plot_wav(wav_data, input_info.channels, input_info.frames, 
-		input_info.samplerate);	
+			/* Plot the wav with Gnuplot, for the craic */	
+			ret = plot_wav(wav_data, input_info.channels, 
+				input_info.frames, input_info.samplerate);	
 
-	for (i = 0, k = 0; i < WINDOW_WIDTH; i += WINDOW_WIDTH * (1 - OVERLAP),
-	k++) {
-		for (j = 0; j < input_info.frames * input_info.channels ; j++) {
-			wav_data[j];
-		}
-	}
+			for (i = 0, k = 0; i < WINDOW_WIDTH; i += 
+					WINDOW_WIDTH * (1 - OVERLAP), k++) {
+				for (j = 0; j < input_info.frames * 
+						input_info.channels ; j++) {
+					wav_data[j];
+				}
+			}
 #endif
-
 			/* Process the wav data */
 			ret = process_wav_data(band, wav_data, input_info, 
-				input, long_ret, &alpha, &a, &b, &dr, &len,
-				&store_start, &store_end);
+				input, long_ret, &alpha_tmp, &a_tmp, &b_tmp, 
+				&dr_tmp, &len, &start_tmp, &end_tmp);
 
 			/* If ret <= 0, error */
 			/* If > 0, ret is the size of the returned arrays */
@@ -215,13 +222,24 @@ int get_wav_data(void) {
 			} else
 				array_size = ret;
 				
-			// SUM THE ARRAYS IF SPLIT
+			/* Move pointers because of SPLIT */
+			a_tmp += array_size * sizeof(double);	
+			b_tmp += array_size * sizeof(double);
+			alpha_tmp += array_size * sizeof(double);
+			dr_tmp += array_size * sizeof(double);
+			start_tmp += array_size * sizeof(int);	
+			end_tmp += array_size * sizeof(int);	
 
-			/* Compute the reverberation time (RT) */
-			ret = compute_rt(samp_freq_per_band[band],
-				array_size, store_start, store_end, dr, a, b,
-				alpha, &mean_rt, &rt_sd);
-	//	}
+			/* Reset bytes in wav_data to zero */
+			memset(wav_data, 0, sizeof(float) * input_info.frames / 
+				SPLIT);
+		}
+		/* Compute the reverberation time (RT) */
+		ret = compute_rt(samp_freq_per_band[band],
+			array_size, store_start, store_end, dr, a, b,
+			alpha, &mean_rt, &rt_sd);
+
+
 		printf("Mean RT for %d band: %lf\n", octave_bands[band], mean_rt);
 		printf("RT Standard Dev for %d band: %lf\n", octave_bands[band], rt_sd);
 	}
