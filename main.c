@@ -1562,7 +1562,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, double *a_par,
 	nlopt_opt nl_obj1 = nlopt_create(NLOPT_LN_COBYLA, 1);
 	nlopt_set_lower_bounds1(nl_obj1, lb[0]);
 	nlopt_set_upper_bounds1(nl_obj1, ub[0]);
-	nlopt_set_maxeval(nl_obj1, 300);
+	nlopt_set_maxeval(nl_obj1, 100);
 	nlopt_set_min_objective(nl_obj1, (nlopt_func) alpha_opt, (void *) &nld);
 
 
