@@ -456,7 +456,17 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 			sd_tmp += pow(fabs(sd_rev_time[i] - *mean_rt), 2);
 
 		*rt_sd = sqrt(sd_tmp / (n_seg - nan_count - 1));
+
+		/* Get standard error from std dist (97.5 percentile) */
+		*rt_sd = (*rt_sd / sqrt(n_seg - nan_count)) * 1.96;
 	}
+
+	/* Free stuff */
+	for (i = 0; i < array_size; i++)
+		free(chan[i]);
+
+	free(chan);
+	free(sd_rev_time);
 
 	return 0;
 }
@@ -595,6 +605,7 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 		(const uint8_t **) &wav_data, octave_bands[band], 
 		&resamp_frames);
 
+	swr_free(&resamp);
 	if (resamp_frames <= 0 || resampled_wav == NULL) {
 		printf("Resample error\nExiting...\n");
 		free(wav_data);
