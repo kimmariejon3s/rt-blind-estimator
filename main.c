@@ -141,14 +141,6 @@ int get_wav_data(void) {
 	store_start = calloc(input_info.frames, sizeof(int));
 	store_end = calloc(input_info.frames, sizeof(int));
 
-	/* Have to do this because of the SPLIT */
-	a_tmp = &a[0];	
-	b_tmp = &a[0];
-	alpha_tmp = &alpha[0];
-	dr_tmp = &dr[0];
-	start_tmp = &store_start[0];	
-	end_tmp = &store_end[0];	
-
 	/* Open file */
 	input_info.format = 0;
 	SNDFILE *input = 
@@ -181,14 +173,22 @@ int get_wav_data(void) {
 
 	if (wav_data == NULL) {
 		printf("Memory allocation error\nExiting...\n");
-		sf_close(input);
+		//sf_close(input);
 		return -1;
 	}
 
 	/* Octave band filtering */
 	for (band = 0; band < 8; band++) {
-		printf("\n\nCalculations of Reverberation Time for %d Hz octave "
-			"band.\n", octave_bands[band]);
+		printf("\n\nCalculations of Reverberation Time for %d Hz "
+			"octave band.\n", octave_bands[band]);
+
+		/* Have to do this because of the SPLIT */
+		a_tmp = &a[0];	
+		b_tmp = &a[0];
+		alpha_tmp = &alpha[0];
+		dr_tmp = &dr[0];
+		start_tmp = &store_start[0];	
+		end_tmp = &store_end[0];	
 
 		/* Single channel, so can call this way */
 		for (i = 0; i <= SPLIT; i++) {
@@ -217,7 +217,7 @@ int get_wav_data(void) {
 			/* If > 0, ret is the size of the returned arrays */
 			if (ret <= 0) {
 				free(wav_data);
-				sf_close(input);
+				//sf_close(input);
 				return -1;
 			} else
 				array_size = ret;
@@ -234,6 +234,15 @@ int get_wav_data(void) {
 			memset(wav_data, 0, sizeof(float) * input_info.frames / 
 				SPLIT);
 		}
+
+		/* Return the wav file pointer to zero position */
+		if (sf_seek(input, 0, SEEK_SET) < 0) {
+			printf("Error returning to start of wav!\n"
+				"Exiting...\n");
+			free(wav_data);
+			return ret;
+		}
+
 		/* Compute the reverberation time (RT) */
 		ret = compute_rt(samp_freq_per_band[band],
 			array_size, store_start, store_end, dr, a, b,
@@ -596,7 +605,7 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 	if (ret < 0) {
 		printf("Resample initialisation error\nExiting...\n");
 		free(wav_data);
-		sf_close(input);
+		//sf_close(input);
 		return -1;
 	}
 
@@ -609,7 +618,7 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 	if (resamp_frames <= 0 || resampled_wav == NULL) {
 		printf("Resample error\nExiting...\n");
 		free(wav_data);
-		sf_close(input);
+		//sf_close(input);
 		return -1;
 	}
 	//DEBUG: comment above and uncomment these 2 if using 3000 Hz wav
@@ -691,7 +700,6 @@ float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, in
 #endif
 
 
-	swr_free(&resamp);
 //FIXME: free output_data ptr at end!
 //	av_freep(&output_data);
 
