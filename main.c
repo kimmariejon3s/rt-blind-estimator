@@ -130,7 +130,7 @@ int main(int argc, char *argv[])
 		printf("Error returned during calculations...\n");
 		return -1;
 	} else
-		printf("Success! Exiting...\n");
+		printf("Exiting gracefully...\n");
 
 	return 0;
 }
@@ -138,7 +138,7 @@ int main(int argc, char *argv[])
 
 void usage_func(void) {
 	printf("Usage:\n"
-		"<Executable file name> <path to wav>\n\n"
+		"./blind_rt_est <path to wav>\n\n"
 		"Wav file must be 16 bit signed and in mono channel format\n");
 }
 

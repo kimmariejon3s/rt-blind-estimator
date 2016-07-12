@@ -11,7 +11,7 @@ just so that I remember what how to run it.
  
 To run the program, execute the following:
 export LD_LIBRARY_PATH=/usr/local/lib/
-gcc -o rt main.c -march=native -I./ -I/usr/include -L/usr/lib/x86_64-linux-gnu -lsndfile -L/usr/local/lib -lswresample -lavutil -lliquid -lnlopt -lm -I/home/kim/SVDLIBC -L/home/kim/SVDLIBC -lsv
+gcc -o blind_rt_est main.c -march=native -I./ -I/usr/include -L/usr/lib/x86_64-linux-gnu -lsndfile -L/usr/local/lib -lswresample -lavutil -lliquid -lnlopt -lm -I./SVDLIBC -L./SVDLIBC -lsv
 
 You can then run the program by executing:
 ./rt
