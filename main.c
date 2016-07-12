@@ -24,6 +24,7 @@
 #include "butter_params.h"
 
 //FIXME: make this 20 when I decide to do the split stuff
+#define	MAX_PATH_SZ	150
 #define SPLIT		20	
 #define MAX_CHUNK_SIZE	1024 * 1024 * 1024
 #define WINDOW_WIDTH	0.5
@@ -52,7 +53,8 @@
 #define RT_DECAY	25		/* 25 = T25 decay; 35 = T35 decay */
 
 /* Functions */
-int get_wav_data(void);
+void usage_func(void);
+int get_wav_data(char *filename);
 int compute_rt(int samp, int array_size, int *store_start, int *store_end, 
 	double *dr, double *a, double *b, double *alpha, double *mean_rt,
 	double *rt_sd);
@@ -106,11 +108,23 @@ int samp_freq_per_band[] = {3000, 3000, 3000, 3000, 3000, 6000, 12000, 24000};
 	float butt_a[3 * (L_ENV + R_ENV)] = {0};
 #endif
 
-int main(void)
+int main(int argc, char *argv[])
 {
 	double ret;
+	char filename[MAX_PATH_SZ];
 
-	ret = get_wav_data();
+	if (argc != 2) {
+		usage_func();
+		return 0;
+	}
+
+	if (snprintf(filename, MAX_PATH_SZ, "%s", argv[1]) >=  MAX_PATH_SZ) {
+		printf("File path too long, please shorten the path / filename\n"
+			"Filename was truncated: %s\n", filename);
+		return 0;
+	}
+
+	ret = get_wav_data(filename);
 
 	if (ret < 0) {
 		printf("Error returned during calculations...\n");
@@ -122,7 +136,13 @@ int main(void)
 }
 
 
-int get_wav_data(void) {
+void usage_func(void) {
+	printf("Usage:\n"
+		"<Executable file name> <path to wav>\n\n"
+		"Wav file must be 16 bit signed and in mono channel format\n");
+}
+
+int get_wav_data(char *filename) {
 	SF_INFO input_info;
 	float *wav_data;
 	unsigned long long long_ret = 0;	
@@ -146,8 +166,16 @@ int get_wav_data(void) {
 	SNDFILE *input = 
 		//sf_open("/home/kim/wav_samples/mono_bach_partita_e_maj.wav",
 		//sf_open("/home/kim/wav_samples/DS_Science_S6_L1_3000HZ.wav",
-		sf_open("/home/kim/BlindRT/DS_Science_S6_L1.wav",
+		//sf_open("/home/kim/BlindRT/DS_Science_S6_L1.wav",
+		sf_open(filename,
 		SFM_READ, &input_info);
+
+	if (input == NULL) {
+		printf("Error opening Wav file!\n");
+		usage_func();
+		return 0;
+	} else
+		printf("Reading %s\n", filename);
 
 	/* Print header data */
 	printf("Frames: %llu\nSample Rate: %d\nChannels: %d\nFormat: 0x%X\n"
