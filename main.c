@@ -219,7 +219,7 @@ int get_wav_data(char *filename) {
 		end_tmp = &store_end[0];	
 
 		/* Single channel, so can call this way */
-		for (i = 0; i <= SPLIT; i++) {
+		for (i = 0; i < SPLIT; i++) {
 			long_ret = sf_read_float(input, wav_data, 
 					floor(input_info.frames / SPLIT));
 
@@ -632,7 +632,6 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 
 	if (ret < 0) {
 		printf("Resample initialisation error\nExiting...\n");
-		free(wav_data);
 		//sf_close(input);
 		return -1;
 	}
@@ -645,7 +644,6 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 	swr_free(&resamp);
 	if (resamp_frames <= 0 || resampled_wav == NULL) {
 		printf("Resample error\nExiting...\n");
-		free(wav_data);
 		//sf_close(input);
 		return -1;
 	}
