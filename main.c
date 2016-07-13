@@ -152,14 +152,6 @@ int get_wav_data(char *filename) {
 	double *a, *b, *alpha, *dr, mean_rt, rt_sd;
 	double *a_tmp, *b_tmp, *alpha_tmp, *dr_tmp;
 
-	/* Create arrays large enough to store values */
-	a = calloc(input_info.frames, sizeof(double));
-	b = calloc(input_info.frames, sizeof(double));
-	alpha = calloc(input_info.frames, sizeof(double));
-	dr = calloc(input_info.frames, sizeof(double));
-	len = calloc(input_info.frames, sizeof(int));
-	store_start = calloc(input_info.frames, sizeof(int));
-	store_end = calloc(input_info.frames, sizeof(int));
 
 	/* Open file */
 	input_info.format = 0;
@@ -195,6 +187,15 @@ int get_wav_data(char *filename) {
 		printf("Input must be a single channel wav file. Exiting...\n");
 		return 0;
 	}
+
+	/* Create arrays large enough to store values */
+	a = calloc(input_info.frames, sizeof(double));
+	b = calloc(input_info.frames, sizeof(double));
+	alpha = calloc(input_info.frames, sizeof(double));
+	dr = calloc(input_info.frames, sizeof(double));
+	len = calloc(input_info.frames, sizeof(int));
+	store_start = calloc(input_info.frames, sizeof(int));
+	store_end = calloc(input_info.frames, sizeof(int));
 
 	/* Store data in array */
 	wav_data = (float *) calloc(input_info.frames / SPLIT, sizeof(float));
@@ -310,7 +311,7 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 	*mean_rt = 0.0;
 	*rt_sd = 0.0;
 
-	printf("computing the Reverberation Time...\n");
+	printf("Computing the Reverberation Time...\n");
 
 	chan = calloc(array_size, sizeof(double *));
 
