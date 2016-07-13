@@ -63,9 +63,8 @@ int optimum_model(double a, double b, double alpha, double dr, int samp, int n,
 int optimum_model_2(double **chan, int n, int chan_sz, int samp, double *lin);
 void hanning(int len, double *hann);
 int process_wav_data(int band, float *wav_data, SF_INFO input_info, 
-	SNDFILE *input, unsigned long long frames, double **p_alpha,
-	double **p_a, double **p_b, double **p_dr, int **p_len, int **p_start,
-	int **p_end);
+	SNDFILE *input, unsigned long long frames, double *p_alpha,
+	double *p_a, double *p_b, double *p_dr, int *p_start, int *p_end);
 float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, 
 	int samp_freq, const uint8_t **wav_data, int band, int *resamp_frms);
 float * oct_filt_data(float *output_data, int band_num, float samp_freq,
@@ -79,7 +78,7 @@ int ** choose_segments(float *var, int step_size, int len, int not_dumped,
 int perform_ml(int **start_end, float *env, int s_e_size, 
 	float *filtered_wav, int resamp_frames, int samp_freq,
 	double **p_alpha, double **p_a_par, double **p_b_par, double **p_dr,
-	int **p_len, int **p_start, int **p_end);
+	int **p_start, int **p_end);
 int ml_fit(float *data_seg, int len, float samp_freq, double *a_par, 
 	double *b_par, double *alph_par);
 double alpha_opt(int n, const double *a, double *grad, void *nldv);
@@ -146,8 +145,8 @@ int get_wav_data(char *filename) {
 	SF_INFO input_info;
 	float *wav_data;
 	unsigned long long long_ret = 0;	
-	int *len, *store_start, *store_end;
-	int i, band, array_size, ret = 0;
+	int *store_start, *store_end;
+	int i, band, array_size, current_sz = 0, ret = 0;
 	int *start_tmp, *end_tmp;
 	double *a, *b, *alpha, *dr, mean_rt, rt_sd;
 	double *a_tmp, *b_tmp, *alpha_tmp, *dr_tmp;
@@ -193,7 +192,6 @@ int get_wav_data(char *filename) {
 	b = calloc(input_info.frames, sizeof(double));
 	alpha = calloc(input_info.frames, sizeof(double));
 	dr = calloc(input_info.frames, sizeof(double));
-	len = calloc(input_info.frames, sizeof(int));
 	store_start = calloc(input_info.frames, sizeof(int));
 	store_end = calloc(input_info.frames, sizeof(int));
 
@@ -207,7 +205,7 @@ int get_wav_data(char *filename) {
 	}
 
 	/* Octave band filtering */
-	for (band = 0; band < 8; band++) {
+	for (band = 2; band < 8; band++) {
 		printf("\n\nCalculations of Reverberation Time for %d Hz "
 			"octave band.\n", octave_bands[band]);
 
@@ -218,9 +216,13 @@ int get_wav_data(char *filename) {
 		dr_tmp = &dr[0];
 		start_tmp = &store_start[0];	
 		end_tmp = &store_end[0];	
+		array_size = 0;
+		current_sz = 0;
 
 		/* Single channel, so can call this way */
 		for (i = 0; i < SPLIT; i++) {
+			printf("\nPart %d of %d\n", i + 1, SPLIT);
+
 			long_ret = sf_read_float(input, wav_data, 
 					floor(input_info.frames / SPLIT));
 
@@ -238,9 +240,9 @@ int get_wav_data(char *filename) {
 			}
 #endif
 			/* Process the wav data */
-			ret = process_wav_data(band, wav_data, input_info, 
-				input, long_ret, &alpha_tmp, &a_tmp, &b_tmp, 
-				&dr_tmp, &len, &start_tmp, &end_tmp);
+			ret = process_wav_data(band, wav_data, input_info,
+				input, long_ret, alpha, a, b,
+				dr, store_start, store_end);
 
 			/* If ret <= 0, error */
 			/* If > 0, ret is the size of the returned arrays */
@@ -248,16 +250,18 @@ int get_wav_data(char *filename) {
 				free(wav_data);
 				//sf_close(input);
 				return -1;
-			} else
-				array_size = ret;
-				
+			} else {
+				array_size += ret;
+				current_sz = ret;
+			}
+
 			/* Move pointers because of SPLIT */
-			a_tmp += array_size * sizeof(double);	
-			b_tmp += array_size * sizeof(double);
-			alpha_tmp += array_size * sizeof(double);
-			dr_tmp += array_size * sizeof(double);
-			start_tmp += array_size * sizeof(int);	
-			end_tmp += array_size * sizeof(int);	
+			a += current_sz;
+			b += current_sz;
+			alpha += current_sz;
+			dr += current_sz;
+			store_start += current_sz;
+			store_end += current_sz;
 
 			/* Reset bytes in wav_data to zero */
 			memset(wav_data, 0, sizeof(float) * input_info.frames / 
@@ -271,6 +275,16 @@ int get_wav_data(char *filename) {
 			free(wav_data);
 			return ret;
 		}
+
+		/* Move pointers because of SPLIT */
+		a = a_tmp;
+		b = b_tmp;
+		alpha = alpha_tmp;
+		dr = dr_tmp;
+		store_start = start_tmp;
+		store_end = end_tmp;
+		printf("SPLIT: %d Address: %p Val: %lf\n", SPLIT,
+			&a[array_size], a[array_size]);
 
 		/* Compute the reverberation time (RT) */
 		ret = compute_rt(samp_freq_per_band[band],
@@ -608,13 +622,13 @@ void hanning(int len, double *hann) {
 }
 
 int process_wav_data(int band, float *wav_data, SF_INFO input_info, 
-		SNDFILE *input, unsigned long long frames, double **p_alpha,
-		double **p_a, double **p_b, double **p_dr, int **p_len,
-		int **p_start, int **p_end) {
-	int ret, s_e_size, resamp_frames = 0, **start_end;
+		SNDFILE *input, unsigned long long frames, double *p_alpha,
+		double *p_a, double *p_b, double *p_dr,
+		int *p_start, int *p_end) {
+	int i, ret, s_e_size, resamp_frames = 0, **start_end;
 	float *resampled_wav, *filtered_wav, *env;
 	double *alpha, *a, *b, *dr;
-	int *len, *store_start, *store_end;
+	int *store_start, *store_end;
 
 	/* Specifications that apply to all subbands */
 	SwrContext *resamp = swr_alloc();
@@ -669,18 +683,19 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 	/* Perform Maximum Liklihood Estimation */
 	ret = perform_ml(start_end, env, s_e_size, filtered_wav, 
 		resamp_frames, samp_freq_per_band[band], &alpha, &a, &b, &dr,
-		&len, &store_start, &store_end);
+		&store_start, &store_end);
 
 	printf("Maximum Liklihood calculations have completed!\n");
 
 	/* Return pointers to caller */
-	*p_alpha = alpha;
-	*p_a = a;
-	*p_b = b;
-	*p_dr = dr;
-	*p_len = len;
-	*p_start = store_start;
-	*p_end = store_end;
+	for (i = 0; i < s_e_size; i++) {
+		*(p_alpha + i) = alpha[i];
+		*(p_a + i) = a[i];
+		*(p_b + i) = b[i];
+		*(p_dr + i) = dr[i];
+		*(p_start + i) = store_start[i];
+		*(p_end + i) = store_end[i];
+	}
 
 	if (ret != 0)
 		return -1;
@@ -1027,7 +1042,7 @@ int ** choose_segments(float *var, int step_size, int len, int not_dumped,
 
 int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav, 
 		int resamp_frames, int samp_freq, double **p_alpha, 
-		double **p_a_par, double **p_b_par, double **p_dr, int **p_len,
+		double **p_a_par, double **p_b_par, double **p_dr,
 		int **p_start, int **p_end) {
 	int sz, i, j, k, len, min_abs_filt_seg, max_abs_filt_seg, ret = 0;
 	float *segment, *env_seg, *abs_filt_seg, *seg_seg2, max_seg2;
@@ -1572,7 +1587,6 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 	*p_a_par = a_par;
 	*p_b_par = b_par;
 	*p_dr = dr;
-	*p_len = len_store;
 	*p_start = store_start;
         *p_end = store_end;
 
