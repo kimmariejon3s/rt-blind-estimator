@@ -18,13 +18,15 @@ FFMPEG_PATH=$(EXT_LIB_PATH)/ffmpeg-3.1.1
 LIBSND_PATH=$(EXT_LIB_PATH)/libsndfile-1.0.27
 LIQUID_PATH=$(EXT_LIB_PATH)/liquid-dsp-1.2.0
 
-all: extract build_deps
-	echo "Building application..."
+all: extract build_deps compile
+
+compile:
+	@echo "Building application..."
 	$(CC) $(CFLAGS) $(INCLUDE_FLAGS) $(LD_DIRS) $(LDFLAGS)
-	echo "Done!"
+	@echo "Done!"
 
 build_deps: extract
-	echo "Building dependencies..."
+	@echo "Building dependencies..."
 	cd $(SVDLIBC_PATH); make
 	cd $(NLOPT_PATH); ./configure --prefix="$(FULL_PATH)/libs"; make; make install
 	cd $(FFMPEG_PATH); ./configure --prefix="$(FULL_PATH)/libs" --bindir="$(FULL_PATH)/libs"; make; make install 
@@ -35,7 +37,7 @@ extract:
 	cd $(EXT_LIB_PATH); make
 
 clean:
-	echo "Cleaning up dependencies..."
+	@echo "Cleaning up dependencies..."
 	cd $(SVDLIBC_PATH); make clean
 	cd $(NLOPT_PATH); make clean
 	cd $(FFMPEG_PATH); make clean

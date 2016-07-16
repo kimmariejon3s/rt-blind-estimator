@@ -3,7 +3,7 @@
 all: unpack
 
 unpack:
-	echo "Unpacking dependencies..."
+	@echo "Unpacking dependencies..."
 	tar zxvf svdlibc.tar.gz
 	tar zxvf nlopt-2.4.2.tar.gz
 	tar zxvf ffmpeg-3.1.1.tar.gz
@@ -11,7 +11,7 @@ unpack:
 	tar zxvf liquid-dsp-1.2.0.tar.gz
 
 clean:
-	echo "Removing folders..."
+	@echo "Removing folders..."
 	rm -rf SVDLIBC
 	rm -rf nlopt-2.4.2
 	rm -rf ffmpeg-3.1.1
