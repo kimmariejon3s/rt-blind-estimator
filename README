@@ -1,23 +1,44 @@
-Blind Estimation of Reverberation Time
+INTRODUCTION
+This program allows the reverberation time of a venue to be determined
+blindly, using a sample of music or speech that is recorded in the venue
+C implementation of Paul Kendrick's Matlab algorithm:
+
+Kendrick, Paul, et al. "Blind estimation of reverberation parameters for
+non-diffuse rooms." Acta Acustica united with Acustica 93.5 (2007): 760-770.
+
+C implementation by Kim Jones <K.Jones20@edu.salford.ac.uk>
 
 PREREQUISITES
-This program required that the libsndfile libraries be installed on the system 
-running the program.
+The audio file should be a wav file and should be in mono signed 16-bit format
+- please convert to this format before use.
 
 RUNNING THE PROGRAM
-This program has been tested on Debian systems. This will be extended to Windows
-platforms in the future, once I actually get it working. This readme is really
-just so that I remember what how to run it.
- 
-To run the program, execute the following:
-export LD_LIBRARY_PATH=/usr/local/lib/
-gcc -o blind_rt_est main.c -march=native -I./ -I/usr/include -L/usr/lib/x86_64-linux-gnu -lsndfile -L/usr/local/lib -lswresample -lavutil -lliquid -lnlopt -lm -I./SVDLIBC -L./SVDLIBC -lsvd
+This program has been tested on x86_64 platform running the Ubuntu-based
+Linux Mint 17.1. This will be extended to Windows platforms in the future.
+
+To run the program, execute the following command:
+	$ make
+
+This will untar all of the source code for the external libraries and build
+/ install the libraries. Following this, it will compile the actual blind
+estimation application.
+
+To remake the application without rebuilding the external libraries (which
+are entirely unmodified by me), run:
+	$ make compile
+
+To clean up all of the code and remove the extracted external library folders
+(leaving only the tar files), run:
+	$ make clean
 
 You can then run the program by executing:
-./blind_rt_est
+./blind_rt_est <Path to wav file>
 
-FUTURE PLANS
-Get it working properly.
-Make it user friendly.
-Make sure it works on Windows too.
-Make a GUI.
+LICENSING
+This software is licensed under the MIT Licence. In addition, the program uses
+the following external libraries:
+FFMPEG: LGPL
+SVDLIBC: MIT Licence
+LIQUID-DSP: MIT Licence
+NLOPT: LGPL
+LIBSNDFILE: LGPL
