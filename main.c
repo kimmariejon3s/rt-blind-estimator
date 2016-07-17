@@ -25,7 +25,7 @@
 
 //FIXME: make this 20 when I decide to do the split stuff
 #define	MAX_PATH_SZ	150
-#define SPLIT		20	
+#define SPLIT		1
 #define MAX_CHUNK_SIZE	1024 * 1024 * 1024
 #define WINDOW_WIDTH	0.5
 #define OVERLAP		0.98
@@ -205,7 +205,7 @@ int get_wav_data(char *filename) {
 	}
 
 	/* Octave band filtering */
-	for (band = 2; band < 8; band++) {
+	for (band = 0; band < 8; band++) {
 		printf("\n\nCalculations of Reverberation Time for %d Hz "
 			"octave band.\n", octave_bands[band]);
 
@@ -283,8 +283,6 @@ int get_wav_data(char *filename) {
 		dr = dr_tmp;
 		store_start = start_tmp;
 		store_end = end_tmp;
-		printf("SPLIT: %d Address: %p Val: %lf\n", SPLIT,
-			&a[array_size], a[array_size]);
 
 		/* Compute the reverberation time (RT) */
 		ret = compute_rt(samp_freq_per_band[band],
