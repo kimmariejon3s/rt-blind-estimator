@@ -16,25 +16,16 @@ RUNNING THE PROGRAM
 This program has been tested on x86_64 platform running the Ubuntu-based
 Linux Mint 17.1. This will be extended to Windows platforms in the future.
 
-To run the program, execute the following command:
+To build the program, execute the following command:
 	$ make
 
-This will untar all of the source code for the external libraries and build
-/ install the libraries. Following this, it will compile the actual blind
-estimation application.
-
-To remake the application without rebuilding the external libraries (which
-are entirely unmodified by me), run:
-	$ make compile
-
-To clean up all of the code and remove the extracted external library folders
-(leaving only the tar files), run:
+To clean up, run:
 	$ make clean
 
 You can then run the program by executing:
 ./blind_rt_est <Path to wav file>
 
-LICENSING
+EXTERNAL LIBRARIES & LICENSING INFORMATION
 This software is licensed under the MIT Licence. In addition, the program uses
 the following external libraries:
 FFMPEG: LGPL
@@ -42,3 +33,5 @@ SVDLIBC: MIT Licence
 LIQUID-DSP: MIT Licence
 NLOPT: LGPL
 LIBSNDFILE: LGPL
+
+The source code for the external libraries is in the lib_src directory.
