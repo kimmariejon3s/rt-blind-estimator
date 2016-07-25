@@ -1,6 +1,6 @@
 The MIT License (MIT)
 
-Copyright (c) 2015 University of Salford
+Copyright (c) 2016 University of Salford
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +19,10 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+In addition, this program dynamically links to:
+FFmpeg under the LGPLv2.1.
+NLopt under LGPL >= v2.1.
+libsndfile under LGPL >= v2.1.
+SVDLIBC under BSD license.
+liquid-dsp under MIT License.

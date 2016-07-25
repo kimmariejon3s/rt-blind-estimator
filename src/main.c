@@ -25,7 +25,7 @@
 
 //FIXME: make this 20 when I decide to do the split stuff
 #define	MAX_PATH_SZ	150
-#define SPLIT		1
+#define SPLIT		20	
 #define MAX_CHUNK_SIZE	1024 * 1024 * 1024
 #define WINDOW_WIDTH	0.5
 #define OVERLAP		0.98
@@ -146,7 +146,7 @@ int get_wav_data(char *filename) {
 	float *wav_data;
 	unsigned long long long_ret = 0;	
 	int *store_start, *store_end;
-	int i, band, array_size, current_sz = 0, ret = 0;
+	int i, j, k, band, array_size, current_sz = 0, ret = 0;
 	int *start_tmp, *end_tmp;
 	double *a, *b, *alpha, *dr, mean_rt, rt_sd;
 	double *a_tmp, *b_tmp, *alpha_tmp, *dr_tmp;
@@ -195,6 +195,14 @@ int get_wav_data(char *filename) {
 	store_start = calloc(input_info.frames, sizeof(int));
 	store_end = calloc(input_info.frames, sizeof(int));
 
+	/* Arrays used to store split values */
+	a_tmp = calloc(input_info.frames / SPLIT, sizeof(double));
+	b_tmp = calloc(input_info.frames / SPLIT, sizeof(double));
+	alpha_tmp = calloc(input_info.frames / SPLIT, sizeof(double));
+	dr_tmp = calloc(input_info.frames / SPLIT, sizeof(double));
+	start_tmp = calloc(input_info.frames / SPLIT, sizeof(int));
+	end_tmp = calloc(input_info.frames / SPLIT, sizeof(int));
+
 	/* Store data in array */
 	wav_data = (float *) calloc(input_info.frames / SPLIT, sizeof(float));
 
@@ -209,13 +217,6 @@ int get_wav_data(char *filename) {
 		printf("\n\nCalculations of Reverberation Time for %d Hz "
 			"octave band.\n", octave_bands[band]);
 
-		/* Have to do this because of the SPLIT */
-		a_tmp = &a[0];	
-		b_tmp = &a[0];
-		alpha_tmp = &alpha[0];
-		dr_tmp = &dr[0];
-		start_tmp = &store_start[0];	
-		end_tmp = &store_end[0];	
 		array_size = 0;
 		current_sz = 0;
 
@@ -241,8 +242,8 @@ int get_wav_data(char *filename) {
 #endif
 			/* Process the wav data */
 			ret = process_wav_data(band, wav_data, input_info,
-				input, long_ret, alpha, a, b,
-				dr, store_start, store_end);
+				input, long_ret, alpha_tmp, a_tmp, b_tmp,
+				dr_tmp, start_tmp, end_tmp);
 
 			/* If ret <= 0, error */
 			/* If > 0, ret is the size of the returned arrays */
@@ -255,16 +256,32 @@ int get_wav_data(char *filename) {
 				current_sz = ret;
 			}
 
-			/* Move pointers because of SPLIT */
-			a += current_sz;
-			b += current_sz;
-			alpha += current_sz;
-			dr += current_sz;
-			store_start += current_sz;
-			store_end += current_sz;
+			for (k = 0; k < current_sz; k++) {
+				j = array_size - current_sz + k;
+				a[j] = a_tmp[k];
+				b[j] = b_tmp[k];
+				alpha[j] = alpha_tmp[k];
+				dr[j] = dr_tmp[k];
+				store_start[j] = (array_size - current_sz) + 
+					start_tmp[k];
+				store_end[j] = (array_size - current_sz) +
+					end_tmp[k];
+			}
 
-			/* Reset bytes in wav_data to zero */
-			memset(wav_data, 0, sizeof(float) * input_info.frames / 
+			/* Reset bytes to zero */
+			memset(wav_data, 0, sizeof(float) * input_info.frames /
+				SPLIT);
+			memset(a_tmp, 0, sizeof(double) * input_info.frames /
+				SPLIT);
+			memset(b_tmp, 0, sizeof(double) * input_info.frames /
+				SPLIT);
+			memset(alpha_tmp, 0, sizeof(double) * input_info.frames /
+				SPLIT);
+			memset(dr_tmp, 0, sizeof(double) * input_info.frames /
+				SPLIT);
+			memset(start_tmp, 0, sizeof(int) * input_info.frames /
+				SPLIT);
+			memset(end_tmp, 0, sizeof(int) * input_info.frames /
 				SPLIT);
 		}
 
@@ -276,13 +293,6 @@ int get_wav_data(char *filename) {
 			return ret;
 		}
 
-		/* Move pointers because of SPLIT */
-		a = a_tmp;
-		b = b_tmp;
-		alpha = alpha_tmp;
-		dr = dr_tmp;
-		store_start = start_tmp;
-		store_end = end_tmp;
 
 		/* Compute the reverberation time (RT) */
 		ret = compute_rt(samp_freq_per_band[band],
@@ -298,6 +308,19 @@ int get_wav_data(char *filename) {
 	/* Clean up */
 //	sf_close(input);
 	free(wav_data);
+	free(a_tmp);
+	free(b_tmp);
+	free(alpha_tmp);
+	free(dr_tmp);
+	free(start_tmp);
+	free(end_tmp);
+	free(a);
+	free(b);
+	free(alpha);
+	free(dr);
+	free(store_start);
+	free(store_end);
+
 	return ret;
 }
 
@@ -329,6 +352,10 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 
 	for (i = 0; i < array_size; i++)
 		chan[i] = calloc(n_chan, sizeof(double));
+
+	printf("store_end: ");
+	for (i = 0; i < array_size; i++)
+		printf("%d ", store_end[i]);
 
 	/* Find the end position of the last decay phase by finding max
 	 *	of store_end[] */
@@ -365,7 +392,7 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 				/* Does decay rate occur in this chunk? */
 				if (store_start[j] >= pos_from && 
 						store_end[j] < pos_to) {
-					//printf("DR: %lf\n", dr[j]);
+					printf("DR: %lf\n", dr[j]);
 					optimum_model(a[j], b[j], alpha[j], dr[j],
 							samp, n_chan, 
 							&chan[k][0]);
@@ -497,6 +524,8 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 
 		free(mat_a);
 	}
+
+	printf("n_seg: %d and nan_count: %d\n", n_seg, nan_count);
 
 	/* Get mean RT and standard dev of RT if num of valid RTs > 1 */
 	if (n_seg - nan_count > 1) {

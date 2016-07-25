@@ -8,30 +8,42 @@ non-diffuse rooms." Acta Acustica united with Acustica 93.5 (2007): 760-770.
 
 C implementation by Kim Jones <K.Jones20@edu.salford.ac.uk>
 
+The original source code for this project can be found in the src/ directory.
+
+
 PREREQUISITES
 The audio file should be a wav file and should be in mono signed 16-bit format
 - please convert to this format before use.
+
 
 RUNNING THE PROGRAM
 This program has been tested on x86_64 platform running the Ubuntu-based
 Linux Mint 17.1. This will be extended to Windows platforms in the future.
 
-To build the program, execute the following command:
-	$ make
-
-To clean up, run:
-	$ make clean
-
-You can then run the program by executing:
+You can then run the program from the same directory and this README by executing:
 ./blind_rt_est <Path to wav file>
+
 
 EXTERNAL LIBRARIES & LICENSING INFORMATION
 This software is licensed under the MIT Licence. In addition, the program uses
 the following external libraries:
-FFMPEG: LGPL
-SVDLIBC: MIT Licence
-LIQUID-DSP: MIT Licence
-NLOPT: LGPL
-LIBSNDFILE: LGPL
 
-The source code for the external libraries is in the lib_src directory.
+This software uses code of FFmpeg (http://ffmpeg.org) licensed under the
+LGPLv2.1 and its source is located in the lib_src/ directory.
+
+This software uses code of NLopt (http://ab-initio.mit.edu/wiki/index.php/NLopt)
+licensed under the LGPL and its source is located in the lib_src/ directory.
+
+This software uses code of libsndfile (http://www.mega-nerd.com/libsndfile/)
+licensed under the LGPL (>=v2.1) and its source is located in the
+lib_src/ directory.
+
+This software uses code of SVDLIBC (https://tedlab.mit.edu/~dr/SVDLIBC/)
+licensed under the BSD Licence and its source is located in the
+lib_src/ directory.
+
+This software uses code of liquid-dsp (http://liquidsdr.org/) licensed under the
+MIT Licence and its source is located in the lib_src/ directory.
+
+The source code for the external libraries was unmodified. The dynamic libraries
+built using these versions of the source code can be found in the libs/ directory.
