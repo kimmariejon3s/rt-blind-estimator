@@ -47,3 +47,18 @@ MIT Licence and its source is located in the lib_src/ directory.
 
 The source code for the external libraries was unmodified. The dynamic libraries
 built using these versions of the source code can be found in the libs/ directory.
+
+
+MISC INFORMATION
+Since the binary is provided, there is no need for the user to comile this
+code by themselves. However, in case the user is curious, this was the GCC
+compile command used:
+
+gcc -o blind_rt_est src/main.c -I./src -I/usr/include -L./libs -lsndfile -L/usr/local/lib -lswresample -lavutil -lliquid -lnlopt -lm -I./lib_src/SVDLIBC/ -lsvd -Wl,-rpath,./libs,--enable-new-dtags
+
+Obviously, the locations of header files, etc, were dependent on the locations
+on my system. However, if you install all of the tarballs in the lib_src
+directory, it should not be difficult to compile from source. Since the
+shared library files are provided, only the header files are needed from the
+tarballs, so alternatively instead of installing, one could simply add -I
+options to the command line for each required header file.
