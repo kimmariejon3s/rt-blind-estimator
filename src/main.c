@@ -23,9 +23,9 @@
 #include <svdlib.h>
 #include "butter_params.h"
 
-//FIXME: make this 20 when I decide to do the split stuff
 #define	MAX_PATH_SZ	150
-#define SPLIT		20	
+//FIXME: make this 20 when I decide to do the split stuff
+#define SPLIT		20
 #define MAX_CHUNK_SIZE	1024 * 1024 * 1024
 #define WINDOW_WIDTH	0.5
 #define OVERLAP		0.98
@@ -44,7 +44,7 @@
 #define DAMP_STEP_SIZE	0.002
 #define MAX_RT		100.0	
 #define MIN_RT		0.005	
-#define	BEST_S_NUM	100000
+#define	BEST_S_NUM	20000		/* Set to 100000 in Matlab */
 #define PAR_UP_BOUND	0.99999
 #define PAR_LOW_BOUND	0.99
 #define SQP_STEP	5
@@ -64,7 +64,8 @@ int optimum_model_2(double **chan, int n, int chan_sz, int samp, double *lin);
 void hanning(int len, double *hann);
 int process_wav_data(int band, float *wav_data, SF_INFO input_info, 
 	SNDFILE *input, unsigned long long frames, double *p_alpha,
-	double *p_a, double *p_b, double *p_dr, int *p_start, int *p_end);
+	double *p_a, double *p_b, double *p_dr, int *p_start, int *p_end, int
+	*filt_frames);
 float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, 
 	int samp_freq, const uint8_t **wav_data, int band, int *resamp_frms);
 float * oct_filt_data(float *output_data, int band_num, float samp_freq,
@@ -147,9 +148,8 @@ int get_wav_data(char *filename) {
 	unsigned long long long_ret = 0;	
 	int *store_start, *store_end;
 	int i, j, k, band, array_size, current_sz = 0, ret = 0;
-	int *start_tmp, *end_tmp;
+	int filt_frm_tot, filt_frames;
 	double *a, *b, *alpha, *dr, mean_rt, rt_sd;
-	double *a_tmp, *b_tmp, *alpha_tmp, *dr_tmp;
 
 
 	/* Open file */
@@ -188,20 +188,12 @@ int get_wav_data(char *filename) {
 	}
 
 	/* Create arrays large enough to store values */
-	a = calloc(input_info.frames, sizeof(double));
-	b = calloc(input_info.frames, sizeof(double));
-	alpha = calloc(input_info.frames, sizeof(double));
-	dr = calloc(input_info.frames, sizeof(double));
-	store_start = calloc(input_info.frames, sizeof(int));
-	store_end = calloc(input_info.frames, sizeof(int));
-
-	/* Arrays used to store split values */
-	a_tmp = calloc(input_info.frames / SPLIT, sizeof(double));
-	b_tmp = calloc(input_info.frames / SPLIT, sizeof(double));
-	alpha_tmp = calloc(input_info.frames / SPLIT, sizeof(double));
-	dr_tmp = calloc(input_info.frames / SPLIT, sizeof(double));
-	start_tmp = calloc(input_info.frames / SPLIT, sizeof(int));
-	end_tmp = calloc(input_info.frames / SPLIT, sizeof(int));
+	a = calloc(BEST_S_NUM, sizeof(double));
+	b = calloc(BEST_S_NUM, sizeof(double));
+	alpha = calloc(BEST_S_NUM, sizeof(double));
+	dr = calloc(BEST_S_NUM, sizeof(double));
+	store_start = calloc(BEST_S_NUM, sizeof(int));
+	store_end = calloc(BEST_S_NUM, sizeof(int));
 
 	/* Store data in array */
 	wav_data = (float *) calloc(input_info.frames / SPLIT, sizeof(float));
@@ -219,6 +211,8 @@ int get_wav_data(char *filename) {
 
 		array_size = 0;
 		current_sz = 0;
+		filt_frm_tot = 0;
+		filt_frames = 0;
 
 		/* Single channel, so can call this way */
 		for (i = 0; i < SPLIT; i++) {
@@ -242,8 +236,8 @@ int get_wav_data(char *filename) {
 #endif
 			/* Process the wav data */
 			ret = process_wav_data(band, wav_data, input_info,
-				input, long_ret, alpha_tmp, a_tmp, b_tmp,
-				dr_tmp, start_tmp, end_tmp);
+				input, long_ret, alpha, a, b,
+				dr, store_start, store_end, &filt_frames);
 
 			/* If ret <= 0, error */
 			/* If > 0, ret is the size of the returned arrays */
@@ -254,38 +248,28 @@ int get_wav_data(char *filename) {
 			} else {
 				array_size += ret;
 				current_sz = ret;
+				filt_frm_tot += filt_frames;
 			}
 
 			for (k = 0; k < current_sz; k++) {
-				j = array_size - current_sz + k;
-				a[j] = a_tmp[k];
-				b[j] = b_tmp[k];
-				alpha[j] = alpha_tmp[k];
-				dr[j] = dr_tmp[k];
-				store_start[j] = (array_size - current_sz) + 
-					start_tmp[k];
-				store_end[j] = (array_size - current_sz) +
-					end_tmp[k];
+				store_start[k] += (filt_frm_tot - filt_frames);
+				store_end[k] += (filt_frm_tot - filt_frames);
 			}
 
+			a += current_sz;
+			b += current_sz;
+			alpha += current_sz;
+			dr += current_sz;
+			store_start += current_sz;
+			store_end += current_sz;
+
+
 			/* Reset bytes to zero */
-			memset(wav_data, 0, sizeof(float) * input_info.frames /
-				SPLIT);
-			memset(a_tmp, 0, sizeof(double) * input_info.frames /
-				SPLIT);
-			memset(b_tmp, 0, sizeof(double) * input_info.frames /
-				SPLIT);
-			memset(alpha_tmp, 0, sizeof(double) * input_info.frames /
-				SPLIT);
-			memset(dr_tmp, 0, sizeof(double) * input_info.frames /
-				SPLIT);
-			memset(start_tmp, 0, sizeof(int) * input_info.frames /
-				SPLIT);
-			memset(end_tmp, 0, sizeof(int) * input_info.frames /
-				SPLIT);
+			memset(wav_data, 0, sizeof(float) *
+				(input_info.frames / SPLIT));
 		}
 
-		/* Return the wav file pointer to zero position */
+		/* Return the pointers to zero position */
 		if (sf_seek(input, 0, SEEK_SET) < 0) {
 			printf("Error returning to start of wav!\n"
 				"Exiting...\n");
@@ -293,27 +277,34 @@ int get_wav_data(char *filename) {
 			return ret;
 		}
 
+		a -= array_size;
+		b -= array_size;
+		alpha -= array_size;
+		dr -= array_size;
+		store_start -= array_size;
+		store_end -= array_size;
 
 		/* Compute the reverberation time (RT) */
 		ret = compute_rt(samp_freq_per_band[band],
 			array_size, store_start, store_end, dr, a, b,
 			alpha, &mean_rt, &rt_sd);
 
-
 		printf("Mean RT for %d band: %lf\n", octave_bands[band], mean_rt);
 		printf("RT Standard Dev for %d band: %lf\n", octave_bands[band], rt_sd);
+
+		/* Reset bytes to zero */
+		memset(a, 0, sizeof(double) * BEST_S_NUM);
+		memset(b, 0, sizeof(double) * BEST_S_NUM);
+		memset(alpha, 0, sizeof(double) * BEST_S_NUM);
+		memset(dr, 0, sizeof(double) * BEST_S_NUM);
+		memset(store_start, 0, sizeof(int) * BEST_S_NUM);
+		memset(store_end, 0, sizeof(int) * BEST_S_NUM);
 	}
 
 
 	/* Clean up */
 //	sf_close(input);
 	free(wav_data);
-	free(a_tmp);
-	free(b_tmp);
-	free(alpha_tmp);
-	free(dr_tmp);
-	free(start_tmp);
-	free(end_tmp);
 	free(a);
 	free(b);
 	free(alpha);
@@ -333,7 +324,7 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 		double *mean_rt, double *rt_sd) {
 	int n_seg, file_len, pos_to, pos_from, seg_len_n, i, j, k, l_reg, ret_sz;
 	int min_5dB_index, min_rtdB_index, nan_count = 0;
-	int n_chan = 4 * samp;
+	int n_chan = 4 * samp, l = 0;
 	double **chan, chan_opt[n_chan], chan_opt_log[n_chan], sd_tmp;
 	double *sd_rev_time, max, min_5dB, min_rtdB, **mat_a, mat_a_mul[2];
 
@@ -352,10 +343,6 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 
 	for (i = 0; i < array_size; i++)
 		chan[i] = calloc(n_chan, sizeof(double));
-
-	printf("store_end: ");
-	for (i = 0; i < array_size; i++)
-		printf("%d ", store_end[i]);
 
 	/* Find the end position of the last decay phase by finding max
 	 *	of store_end[] */
@@ -392,12 +379,13 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 				/* Does decay rate occur in this chunk? */
 				if (store_start[j] >= pos_from && 
 						store_end[j] < pos_to) {
-					printf("DR: %lf\n", dr[j]);
+					//printf("DR: %lf\n", dr[j]);
 					optimum_model(a[j], b[j], alpha[j], dr[j],
 							samp, n_chan, 
 							&chan[k][0]);
 
-					k++;		
+					k++;
+					l++;
 				}
 			}
 		}
@@ -526,6 +514,7 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 	}
 
 	printf("n_seg: %d and nan_count: %d\n", n_seg, nan_count);
+	printf("There are %d decays of at least -25 dB.\n", l);
 
 	/* Get mean RT and standard dev of RT if num of valid RTs > 1 */
 	if (n_seg - nan_count > 1) {
@@ -651,7 +640,7 @@ void hanning(int len, double *hann) {
 int process_wav_data(int band, float *wav_data, SF_INFO input_info, 
 		SNDFILE *input, unsigned long long frames, double *p_alpha,
 		double *p_a, double *p_b, double *p_dr,
-		int *p_start, int *p_end) {
+		int *p_start, int *p_end, int *filt_frames) {
 	int i, ret, s_e_size, resamp_frames = 0, **start_end;
 	float *resampled_wav, *filtered_wav, *env;
 	double *alpha, *a, *b, *dr;
@@ -689,6 +678,9 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 		//sf_close(input);
 		return -1;
 	}
+
+	*filt_frames = resamp_frames;
+
 	//DEBUG: comment above and uncomment these 2 if using 3000 Hz wav
 	// WARN: only works for lower oct bands!
 	//resampled_wav = wav_data;
@@ -698,7 +690,11 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 	filtered_wav = oct_filt_data(resampled_wav, 
 		band, (float) samp_freq_per_band[band],
 		resamp_frames);
-	
+
+	/* Free memory no longer needed */
+	free(resampled_wav);
+	resampled_wav = NULL;
+
 	/* Obtain signal envelope */
 	env = get_envelope((float) samp_freq_per_band[band], filtered_wav, 
 		resamp_frames);
@@ -712,7 +708,8 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 		resamp_frames, samp_freq_per_band[band], &alpha, &a, &b, &dr,
 		&store_start, &store_end);
 
-	printf("Maximum Liklihood calculations have completed!\n");
+	printf("Maximum Liklihood calculations have completed!\n"
+		"%d potential segments analysed\n", s_e_size);
 
 	/* Return pointers to caller */
 	for (i = 0; i < s_e_size; i++) {
@@ -724,6 +721,32 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 		*(p_end + i) = store_end[i];
 	}
 
+	/* Free memory no longer needed */
+	free(filtered_wav);
+	filtered_wav = NULL;
+
+	free(env);
+	env = NULL;
+
+	for (i = 0; i < 2; i++)
+		free(start_end[i]);
+	free(start_end);
+	start_end = NULL;
+
+	free(alpha);
+	alpha = NULL;
+	free(a);
+	a = NULL;
+	free(b);
+	b = NULL;
+	free(dr);
+	dr = NULL;
+	free(store_start);
+	store_start = NULL;
+	free(store_end);
+	store_end = NULL;
+
+	/* Return */
 	if (ret != 0)
 		return -1;
 	else
@@ -1018,12 +1041,17 @@ int ** apply_polyfit(float samp_freq, int resamp_frames, float *env, int *s_e_si
 		
 	}
 
-	/* Free 2d arrays */
+	/* Free arrays */
 	for (i = 0; i < num_segs; i++) 
 		free(poly_res[i]);
-	
-	free(poly_seg);
 	free(poly_res);
+
+	for (i = 0; i < 2; i++);
+		free(seg_index[i]);
+	free(seg_index);
+	seg_index = NULL;
+
+	free(poly_seg);
 	free(var);
 	free(poly_param);
 	free(log_env);
@@ -1609,7 +1637,7 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 	}
 
 	/* Pointers used by caller cannot be freed. They are alpha[], a[],
-		b[], len_store[], store_start[], store_end[] and dr[] */
+		b[], store_start[], store_end[] and dr[] */
 	*p_alpha = alpha;
 	*p_a_par = a_par;
 	*p_b_par = b_par;
@@ -1625,6 +1653,7 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 	free(abs_filtered);
 	free(chan);
 	free(y);
+	free(len_store);
 
 	if (ret < 0)
 		return -1;
