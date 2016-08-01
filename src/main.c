@@ -67,7 +67,7 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 	double *p_a, double *p_b, double *p_dr, int *p_start, int *p_end, int
 	*filt_frames);
 float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, 
-	int samp_freq, const uint8_t **wav_data, int band, int *resamp_frms);
+	int samp_freq, const uint8_t **wav_data, int *resamp_frms);
 float * oct_filt_data(float *output_data, int band_num, float samp_freq,
 	int resamp_frames);
 float * get_envelope(float samp_freq, float *resampled_wav, 
@@ -82,6 +82,8 @@ int perform_ml(int **start_end, float *env, int s_e_size,
 	int **p_start, int **p_end);
 int ml_fit(float *data_seg, int len, float samp_freq, double *a_par, 
 	double *b_par, double *alph_par);
+double get_decay_region(int c_len, double a, double b, double alpha,
+		int len_store);
 double alpha_opt(int n, const double *a, double *grad, void *nldv);
 double par_3_opt(int n, const double *a, double *grad, void *nldv);
 
@@ -153,12 +155,7 @@ int get_wav_data(char *filename) {
 
 	/* Open file */
 	input_info.format = 0;
-	SNDFILE *input = 
-		//sf_open("/home/kim/wav_samples/mono_bach_partita_e_maj.wav",
-		//sf_open("/home/kim/wav_samples/DS_Science_S6_L1_3000HZ.wav",
-		//sf_open("/home/kim/BlindRT/DS_Science_S6_L1.wav",
-		sf_open(filename,
-		SFM_READ, &input_info);
+	SNDFILE *input = sf_open(filename, SFM_READ, &input_info);
 
 	if (input == NULL) {
 		printf("Error opening Wav file!\n");
@@ -179,10 +176,12 @@ int get_wav_data(char *filename) {
 			(input_info.format & 0xFF000F) != 0x130002) {
 		printf("Program requires 16-bit signed wav.\nMake sure format "
 			"is 0x10002 or 0x130002.\nExiting...\n");
+		sf_close(input);
 		return 0;
 	}
 	if (input_info.channels != 1) {
 		printf("Input must be a single channel wav file. Exiting...\n");
+		sf_close(input);
 		return 0;
 	}
 
@@ -199,7 +198,7 @@ int get_wav_data(char *filename) {
 
 	if (wav_data == NULL) {
 		printf("Memory allocation error\nExiting...\n");
-		//sf_close(input);
+		sf_close(input);
 		return -1;
 	}
 
@@ -225,11 +224,11 @@ int get_wav_data(char *filename) {
 				input, long_ret, alpha, a, b,
 				dr, store_start, store_end, &filt_frames);
 
-			/* If ret <= 0, error */
-			/* If > 0, ret is the size of the returned arrays */
-			if (ret <= 0) {
+			/* If ret < 0, error */
+			/* If >= 0, ret is the size of the returned arrays */
+			if (ret < 0) {
 				free(wav_data);
-				//sf_close(input);
+				sf_close(input);
 				return -1;
 			} else {
 				array_size += ret;
@@ -260,6 +259,7 @@ int get_wav_data(char *filename) {
 			printf("Error returning to start of wav!\n"
 				"Exiting...\n");
 			free(wav_data);
+			sf_close(input);
 			return ret;
 		}
 
@@ -289,7 +289,7 @@ int get_wav_data(char *filename) {
 
 
 	/* Clean up */
-//	sf_close(input);
+	sf_close(input);
 	free(wav_data);
 	free(a);
 	free(b);
@@ -521,6 +521,7 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 
 	free(chan);
 	free(sd_rev_time);
+	svdFreeSVDRec(svd_mat);
 
 	return 0;
 }
@@ -653,10 +654,10 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 		return -1;
 	}
 
+	/* Resample the wav file */
 	resampled_wav = resamp_wav_data(resamp, input_info.samplerate, 
 		(uint64_t) frames, samp_freq_per_band[band],
-		(const uint8_t **) &wav_data, octave_bands[band], 
-		&resamp_frames);
+		(const uint8_t **) &wav_data, &resamp_frames);
 
 	swr_free(&resamp);
 	if (resamp_frames <= 0 || resampled_wav == NULL) {
@@ -689,16 +690,16 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 	start_end = apply_polyfit((float) samp_freq_per_band[band], 
 		resamp_frames, env, &s_e_size);
 
-	/* Perform Maximum Liklihood Estimation */
+	/* Perform Maximum Likelihood Estimation */
 	ret = perform_ml(start_end, env, s_e_size, filtered_wav, 
 		resamp_frames, samp_freq_per_band[band], &alpha, &a, &b, &dr,
 		&store_start, &store_end);
 
-	printf("Maximum Liklihood calculations have completed!\n"
-		"%d potential segments analysed\n", s_e_size);
+	printf("Maximum Likelihood calculations have completed!\n%d potential "
+		"segments analysed, %d may be valid\n", s_e_size, ret);
 
 	/* Return pointers to caller */
-	for (i = 0; i < s_e_size; i++) {
+	for (i = 0; i < ret; i++) {
 		*(p_alpha + i) = alpha[i];
 		*(p_a + i) = a[i];
 		*(p_b + i) = b[i];
@@ -733,13 +734,13 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 	store_end = NULL;
 
 	/* Return */
-	if (ret != 0)
+	if (ret < 0)
 		return -1;
 	else
-		return s_e_size;
+		return ret;
 }
 
-float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int samp_freq, const uint8_t **wav_data, int band, int *resamp_frms) {
+float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, int samp_freq, const uint8_t **wav_data, int *resamp_frms) {
 	uint8_t *output_data;
 	int ret, resamp_frames;
 
@@ -763,23 +764,6 @@ float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, in
 		av_freep(&output_data);
 		return NULL;
 	}
-
-#if 0
-	/* Generate wav to check resampled data is not garbage */
-	SF_INFO output_info;
-	output_info.samplerate = samp_freq;
-	output_info.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
-	output_info.channels = 1;
-
-	SNDFILE* otpt = sf_open("/home/kim/wav_samples/Z.wav", 
-		SFM_WRITE, &output_info);
-
-	sf_write_float(otpt, (float *) output_data, resamp_frames);
-#endif
-
-
-//FIXME: free output_data ptr at end!
-//	av_freep(&output_data);
 
 	/* Store # frames in pointer */
 	*resamp_frms = resamp_frames;
@@ -925,6 +909,8 @@ float * get_envelope(float samp_freq, float *filtered_wav,
 	free(hilb);
 	free(filt_complex);
 	iirfilt_crcf_destroy(f_obj_env);
+	fft_destroy_plan(ifft_pln);
+	fft_destroy_plan(fft_pln);
 
 	/* envelope pointer: return to previous function */
 	return env;
@@ -1032,7 +1018,7 @@ int ** apply_polyfit(float samp_freq, int resamp_frames, float *env, int *s_e_si
 		free(poly_res[i]);
 	free(poly_res);
 
-	for (i = 0; i < 2; i++);
+	for (i = 0; i < num_segs - dump; i++)
 		free(seg_index[i]);
 	free(seg_index);
 	seg_index = NULL;
@@ -1085,7 +1071,7 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 		int resamp_frames, int samp_freq, double **p_alpha, 
 		double **p_a_par, double **p_b_par, double **p_dr,
 		int **p_start, int **p_end) {
-	int sz, i, j, k, len, min_abs_filt_seg, max_abs_filt_seg, ret = 0;
+	int sz, i, j, k, len, min_abs_filt_seg, max_abs_filt_seg, cnt, ret = 0;
 	float *segment, *env_seg, *abs_filt_seg, *seg_seg2, max_seg2;
 	float *abs_filtered = calloc(resamp_frames, sizeof(float));
 	int *store_start = calloc(s_e_size, sizeof(int)); 
@@ -1095,9 +1081,6 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 	double *b_par = calloc(s_e_size, sizeof(double));
 	double *alpha = calloc(s_e_size, sizeof(double));
 	double *dr = calloc(s_e_size, sizeof(double));
-	double *chan = calloc(6 * samp_freq, sizeof(double));
-	double *y = calloc(6 * samp_freq, sizeof(double));
-	double max_y;
 
 	printf("Performing Maximum Liklihood calculations\n"
 		"This will take a while...\n");
@@ -1114,7 +1097,7 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 	seg_seg2 = calloc(sz + sz - roundf((DAMP_SEG_SIZE / 2) * samp_freq), 
 		sizeof(float));
 
-	for (i = 0; i < s_e_size; i++) {
+	for (i = 0, cnt = 0; i < s_e_size; i++) {
 		len = abs(start_end[1][i] - start_end[0][i]);
 
 		/* Store decay segment in new array */
@@ -1163,41 +1146,13 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 
 		/* Save fine-tuned start and end locations */
 		// FIXME: are the -1's OK here? Compare to MATLAB
-		store_start[i] = start_end[0][i] + max_abs_filt_seg;
-		store_end[i] = start_end[0][i] + max_abs_filt_seg + 
+		store_start[cnt] = start_end[0][i] + max_abs_filt_seg;
+		store_end[cnt] = start_end[0][i] + max_abs_filt_seg +
 				len_store[i] - 1;
 
 		/* ML fitting of decay model to the data */
 		ret = ml_fit(seg_seg2, len_store[i], (float) samp_freq, 
-			&a_par[i], &b_par[i], &alpha[i]);
-
-		/* FIXME: use ret to check for error */
-		/* FIXME: fix all error cases - clean exit and all that */
-
-		/* Compute decay curves using ML-calculated params */
-		for (j = 0; j < 6 * samp_freq; j++) {
-			chan[j] = alpha[i] * pow(a_par[i], j) + 
-				(1.0 - alpha[i]) * pow(b_par[i], j);
-		}
-
-		/* Get the reverse cumsum of chan[] and assign to y in reverse */
-		y[6 * samp_freq - 1] = pow(chan[6 * samp_freq - 1], 2);
-		for (j = 6 * samp_freq - 2; j >= 0; j--) 
-			y[j] = pow(chan[j], 2) + y[j + 1];
-
-		/* Get max of fabs(y) */
-		max_y = fabs(y[0]);
-		for (j = 1; j < 6 * samp_freq; j++) {
-			if (fabs(y[j]) > max_y)
-				max_y = fabs(y[j]);		
-		}
-
-		/* Normalise y first value will be max; stores whole cumsum */
-                for (j = 0; j < 6 * samp_freq; j++) 
-			y[j] = 10.0 * log10(y[j] / max_y);
-
-		dr[i] = y[len_store[i]];	
-		//printf("DEUBG DR %d: %lf\n",i, dr[i]);
+			&a_par[cnt], &b_par[cnt], &alpha[cnt]);
 
 		/* Reset to zero b/c arrays are longer than they need to be */
 		memset(segment, 0, sz * sizeof(float));
@@ -1205,6 +1160,27 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 			samp_freq)) * sizeof(float));
 		memset(env_seg, 0, sz * sizeof(float));
 		memset(abs_filt_seg, 0, sz * sizeof(float));
+
+		if (ret == -1) {
+			/* DR being discarded */
+			continue;
+		} else if (ret < -1) {
+			/* Error */
+			free(segment);
+			free(seg_seg2);
+			free(env_seg);
+			free(abs_filt_seg);
+			free(abs_filtered);
+			free(len_store);
+
+			return -1;
+		}
+
+		/* If code gets to here, DR was possibly valid */
+		/* Compute decay curves using ML-calculated params */
+		dr[cnt] = get_decay_region(6 * samp_freq, a_par[cnt], b_par[cnt],
+			alpha[cnt], len_store[i]);
+		cnt++;
 	}
 
 	/* Pointers used by caller cannot be freed. They are alpha[], a[],
@@ -1222,19 +1198,52 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 	free(env_seg);
 	free(abs_filt_seg);
 	free(abs_filtered);
-	free(chan);
-	free(y);
 	free(len_store);
 
-	if (ret < 0)
+	if (ret < 0 && ret != -1)
 		return -1;
 	else
-		return 0;
+		return cnt;
+}
+
+double get_decay_region(int c_len, double a, double b, double alpha,
+		int len_store) {
+	double *chan = calloc(c_len, sizeof(double));
+	double *y = calloc(c_len, sizeof(double));
+	double dr;
+	int j, max_y;
+
+	/* Compute decay curves using ML-calculated params */
+	for (j = 0; j < c_len; j++)
+		chan[j] = alpha * pow(a, j) + (1.0 - alpha) * pow(b, j);
+
+	/* Get the reverse cumsum of chan[] and assign to y in reverse */
+	y[c_len - 1] = pow(chan[c_len - 1], 2);
+	for (j = c_len - 2; j >= 0; j--)
+		y[j] = pow(chan[j], 2) + y[j + 1];
+
+	/* Get max of fabs(y) */
+	max_y = fabs(y[0]);
+	for (j = 1; j < c_len; j++) {
+		if (fabs(y[j]) > max_y)
+			max_y = fabs(y[j]);
+	}
+
+	/* Normalise y first value will be max; stores whole cumsum */
+	for (j = 0; j < c_len; j++) 
+		y[j] = 10.0 * log10(y[j] / max_y);
+
+	dr = y[len_store];
+
+	free(chan);
+	free(y);
+
+	return dr;
 }
 
 int ml_fit(float *data_seg, int len, float samp_freq, double *a_par, 
 		double *b_par, double *alph_par) {
-	double min, max, interval, j, gmax_val, x_fine[3], fine_val;
+	double min, max, interval, j, gmax_val, x_fine[3], fine_val, dr;
 	double *coarse_grid, lb[3], ub[3];
 	double like[SQP_STEP][SQP_STEP] = {0}, alpha[SQP_STEP][SQP_STEP] = {0};
 	int gmax_pos[2], i, k, el_cg, ret = 0;
@@ -1249,7 +1258,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, double *a_par,
 	nlopt_opt nl_obj1 = nlopt_create(NLOPT_LN_COBYLA, 1);
 	nlopt_set_lower_bounds1(nl_obj1, lb[0]);
 	nlopt_set_upper_bounds1(nl_obj1, ub[0]);
-	nlopt_set_maxeval(nl_obj1, 100);
+	nlopt_set_maxeval(nl_obj1, 50);
 	nlopt_set_min_objective(nl_obj1, (nlopt_func) alpha_opt, (void *) &nld);
 
 
@@ -1296,12 +1305,20 @@ int ml_fit(float *data_seg, int len, float samp_freq, double *a_par,
 				}
 			}
 
-	//		printf("k: %d, i: %d, ret: %d, a: %lf like: %le coarse: %lf\n", k+1, i+1, ret, alpha[k][i], like[k][i], coarse_grid[k]);
+			//printf("k: %d, i: %d, ret: %d, a: %lf like: %le coarse: %lf\n", k+1, i+1, ret, alpha[k][i], like[k][i], coarse_grid[k]);
 		}
 	}
 
 	/* No longer need nl_obj1; coarse search is done */
 	nlopt_destroy(nl_obj1);
+
+	dr = get_decay_region(6 * samp_freq, coarse_grid[gmax_pos[0]],
+		coarse_grid[gmax_pos[1]], alpha[gmax_pos[0]][gmax_pos[1]], len);
+
+	if (dr > -10.0) {
+		free(coarse_grid);
+		return -1;
+	}
 
 	/* Create new nlopt object for fine search */
 	nlopt_opt nl_obj3 = nlopt_create(NLOPT_LN_COBYLA, 3);
@@ -1332,9 +1349,10 @@ int ml_fit(float *data_seg, int len, float samp_freq, double *a_par,
 	*alph_par = x_fine[2];
 	
 	free(coarse_grid);
+	nlopt_destroy(nl_obj3);
 
 	if (ret < 0)
-		return -1;
+		return -2;
 	else
 		return 0;
 }
