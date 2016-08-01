@@ -24,8 +24,7 @@
 #include "butter_params.h"
 
 #define	MAX_PATH_SZ	150
-//FIXME: make this 20 when I decide to do the split stuff
-#define SPLIT		20
+#define SPLIT		20		/* Process wav in SPLIT segment(s) */
 #define MAX_CHUNK_SIZE	1024 * 1024 * 1024
 #define WINDOW_WIDTH	0.5
 #define OVERLAP		0.98
@@ -650,7 +649,6 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 
 	if (ret < 0) {
 		printf("Resample initialisation error\nExiting...\n");
-		//sf_close(input);
 		return -1;
 	}
 
@@ -662,16 +660,10 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 	swr_free(&resamp);
 	if (resamp_frames <= 0 || resampled_wav == NULL) {
 		printf("Resample error\nExiting...\n");
-		//sf_close(input);
 		return -1;
 	}
 
 	*filt_frames = resamp_frames;
-
-	//DEBUG: comment above and uncomment these 2 if using 3000 Hz wav
-	// WARN: only works for lower oct bands!
-	//resampled_wav = wav_data;
-	//resamp_frames = frames;
 
 	/* Octave band filtering */
 	filtered_wav = oct_filt_data(resampled_wav, 
@@ -900,10 +892,6 @@ float * get_envelope(float samp_freq, float *filtered_wav,
 		env[i] = cabsf(tmp[i]);
 	}
 
-
-	//FIXME: why is this causing a fre pointer error???
-	//fft_destroy_plan(fft_pln);
-	//DONT FREE ENV
 	free(tmp2);
 	free(tmp);
 	free(hilb);
