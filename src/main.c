@@ -687,17 +687,20 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 		resamp_frames, samp_freq_per_band[band], &alpha, &a, &b, &dr,
 		&store_start, &store_end);
 
-	printf("Maximum Likelihood calculations have completed!\n%d potential "
-		"segments analysed, %d may be valid\n", s_e_size, ret);
+	if (ret >= 0) {
+		printf("Maximum Likelihood calculations have completed!\n%d "
+			"potential segments analysed, %d may be valid\n",
+			s_e_size, ret);
 
-	/* Return pointers to caller */
-	for (i = 0; i < ret; i++) {
-		*(p_alpha + i) = alpha[i];
-		*(p_a + i) = a[i];
-		*(p_b + i) = b[i];
-		*(p_dr + i) = dr[i];
-		*(p_start + i) = store_start[i];
-		*(p_end + i) = store_end[i];
+		/* Return pointers to caller */
+		for (i = 0; i < ret; i++) {
+			*(p_alpha + i) = alpha[i];
+			*(p_a + i) = a[i];
+			*(p_b + i) = b[i];
+			*(p_dr + i) = dr[i];
+			*(p_start + i) = store_start[i];
+			*(p_end + i) = store_end[i];
+		}
 	}
 
 	/* Free memory no longer needed */
@@ -1070,7 +1073,7 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 	double *alpha = calloc(s_e_size, sizeof(double));
 	double *dr = calloc(s_e_size, sizeof(double));
 
-	printf("Performing Maximum Liklihood calculations\n"
+	printf("Performing Maximum Likelihood calculations\n"
 		"This will take a while...\n");
 
 	/* Get absolute vaule of filtered wav */
@@ -1154,6 +1157,7 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 			continue;
 		} else if (ret < -1) {
 			/* Error */
+			printf("Error during ML calculations!\n");
 			free(segment);
 			free(seg_seg2);
 			free(env_seg);
@@ -1275,8 +1279,15 @@ int ml_fit(float *data_seg, int len, float samp_freq, double *a_par,
 			alpha[k][i] = 0.5;
 			nld.a_val = coarse_grid[k];
 
-			ret |= nlopt_optimize(nl_obj1, &alpha[k][i], 
+			ret = nlopt_optimize(nl_obj1, &alpha[k][i], 
 				&like[k][i]);
+
+			/* -4 is an acceptable nlopt return code */
+			if (ret < 0 && ret != -4) {
+				nlopt_destroy(nl_obj1);
+				free(coarse_grid);
+				return -2;
+			}
 
 			like[k][i] *= -1;
 
@@ -1303,7 +1314,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, double *a_par,
 	dr = get_decay_region(6 * samp_freq, coarse_grid[gmax_pos[0]],
 		coarse_grid[gmax_pos[1]], alpha[gmax_pos[0]][gmax_pos[1]], len);
 
-	if (dr > -10.0) {
+	if (dr > -1.0) {
 		free(coarse_grid);
 		return -1;
 	}
@@ -1327,7 +1338,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, double *a_par,
 	x_fine[2] = alpha[gmax_pos[0]][gmax_pos[1]];	
 	//printf("B4 XVAL: %lf %lf %lf %le\n", x_fine[0], x_fine[1], x_fine[2], gmax_val); 
 
-	ret |= nlopt_optimize(nl_obj3, x_fine, &fine_val);
+	ret = nlopt_optimize(nl_obj3, x_fine, &fine_val);
 	//printf("DEBUG FINE RESULTS - ret: %d XVAL: %lf %lf %lf FINE_VAL: %le\n", 
 		//ret, x_fine[0], x_fine[1], x_fine[2], fine_val);
 	
@@ -1339,7 +1350,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, double *a_par,
 	free(coarse_grid);
 	nlopt_destroy(nl_obj3);
 
-	if (ret < 0)
+	if (ret < 0 && ret != -4)
 		return -2;
 	else
 		return 0;
