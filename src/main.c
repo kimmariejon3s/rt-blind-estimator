@@ -14,6 +14,7 @@
 #include <math.h>
 #include <complex.h>
 #include <float.h>
+#include <time.h>
 #include <sndfile.h>
 #include <libswresample/swresample.h>
 #include <libavutil/channel_layout.h>
@@ -47,16 +48,17 @@
 #define PAR_UP_BOUND	0.99999
 #define PAR_LOW_BOUND	0.99
 #define SQP_STEP	5
-
+//#define COARSE_DR_EST	1
 #define SEG_LEN		3 * 60		/* 3 minutes */
-#define RT_DECAY	25		/* 25 = T25 decay; 35 = T35 decay */
+#define RT_DECAY	25		/* 25 = T20 decay; 35 = T30 decay */
+#define DISCARD_THRESH	0		/* Discard decay segs if <= this */
 
 /* Functions */
 void usage_func(void);
 int get_wav_data(char *filename);
 int compute_rt(int samp, int array_size, int *store_start, int *store_end, 
 	double *dr, double *a, double *b, double *alpha, double *mean_rt,
-	double *rt_sd);
+	double *rt_sd, int band, FILE *fh);
 int optimum_model(double a, double b, double alpha, double dr, int samp, int n,
 	double *chan_2);
 int optimum_model_2(double **chan, int n, int chan_sz, int samp, double *lin);
@@ -99,6 +101,7 @@ struct nl_extra_data {
 int num_bands = 8;
 int octave_bands[] = {63, 125, 250, 500, 1000, 2000, 4000, 8000};
 int samp_freq_per_band[] = {3000, 3000, 3000, 3000, 3000, 6000, 12000, 24000};
+const char fname[] = "./blind_rts.log";
 
 #if OCT_FILT_ORDER >= ENV_FILT_ORDER
 	float butt_b[3 * (L_OCT + R_OCT)] = {0};
@@ -129,9 +132,10 @@ int main(int argc, char *argv[])
 	if (ret < 0) {
 		printf("Error returned during calculations...\n");
 		return -1;
-	} else
+	} else {
+		printf("Results exported to log file: %s\n", fname);
 		printf("Exiting gracefully...\n");
-
+        }
 	return 0;
 }
 
@@ -150,7 +154,13 @@ int get_wav_data(char *filename) {
 	int i, j, k, band, array_size, current_sz = 0, ret = 0;
 	int filt_frm_tot, filt_frames;
 	double *a, *b, *alpha, *dr, mean_rt, rt_sd;
+	time_t ct = time(NULL);
+	FILE *fh = fopen(fname, "a+");
 
+	if (fh == NULL) {
+		printf("Error opening log file!\n");
+		return 0;
+	}
 
 	/* Open file */
 	input_info.format = 0;
@@ -184,6 +194,10 @@ int get_wav_data(char *filename) {
 		return 0;
 	}
 
+	fprintf(fh, "=====================================================\n");
+	fprintf(fh, "Reverberation Time calculations: %s\n", filename);
+	fprintf(fh, "Time and Date: %s\n", ctime(&ct));
+
 	/* Create arrays large enough to store values */
 	a = calloc(BEST_S_NUM, sizeof(double));
 	b = calloc(BEST_S_NUM, sizeof(double));
@@ -204,6 +218,8 @@ int get_wav_data(char *filename) {
 	/* Octave band filtering */
 	for (band = 0; band < 8; band++) {
 		printf("\n\nCalculations of Reverberation Time for %d Hz "
+			"octave band.\n", octave_bands[band]);
+		fprintf(fh, "\nCalculations of Reverberation Time for %d Hz "
 			"octave band.\n", octave_bands[band]);
 
 		array_size = 0;
@@ -272,10 +288,9 @@ int get_wav_data(char *filename) {
 		/* Compute the reverberation time (RT) */
 		ret = compute_rt(samp_freq_per_band[band],
 			array_size, store_start, store_end, dr, a, b,
-			alpha, &mean_rt, &rt_sd);
+			alpha, &mean_rt, &rt_sd, octave_bands[band], fh);
 
-		printf("Mean RT for %d band: %lf\n", octave_bands[band], mean_rt);
-		printf("RT Standard Dev for %d band: %lf\n", octave_bands[band], rt_sd);
+		fprintf(fh, "=============================================\n");
 
 		/* Reset bytes to zero */
 		memset(a, 0, sizeof(double) * BEST_S_NUM);
@@ -296,6 +311,7 @@ int get_wav_data(char *filename) {
 	free(dr);
 	free(store_start);
 	free(store_end);
+	fclose(fh);
 
 	return ret;
 }
@@ -306,10 +322,10 @@ int get_wav_data(char *filename) {
  */
 int compute_rt(int samp, int array_size, int *store_start, int *store_end, 
 		double *dr, double *a, double *b, double *alpha, 
-		double *mean_rt, double *rt_sd) {
+		double *mean_rt, double *rt_sd, int band, FILE *fh) {
 	int n_seg, file_len, pos_to, pos_from, seg_len_n, i, j, k, l_reg, ret_sz;
 	int min_5dB_index, min_rtdB_index, nan_count = 0;
-	int n_chan = 4 * samp, l = 0;
+	int n_chan = 4 * samp, l = 0, discard = 0;
 	double **chan, chan_opt[n_chan], chan_opt_log[n_chan], sd_tmp;
 	double *sd_rev_time, max, min_5dB, min_rtdB, **mat_a, mat_a_mul[2];
 
@@ -375,8 +391,13 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 			}
 		}
 
-		if (k <= 0)
+		printf("Segment: %d; Num Valid Decays: %d\n", i, k);
+		fprintf(fh, "Segment: %d; Num Valid Decays: %d\n", i, k);
+
+		if (k <= DISCARD_THRESH) {
+			discard++;
 			continue;
+		}
 
 		ret_sz = optimum_model_2(chan, n_chan, k, samp, chan_opt);
 
@@ -484,10 +505,11 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 		 * If RT for segment != nan, add to rev_time
 		 */
 		if(!isnan(-60.0 / (samp * mat_a_mul[1]))) {
-			sd_rev_time[i - nan_count] = ((double) (-60.0 *
-				min_rtdB_index)) / (samp * mat_a_mul[1]);
+			sd_rev_time[i - nan_count - discard] =
+				((double) (-60.0 * min_rtdB_index)) /
+				(samp * mat_a_mul[1]);
 
-			*mean_rt += sd_rev_time[i - nan_count];
+			*mean_rt += sd_rev_time[i - nan_count - discard];
 		} else
 			nan_count++;
 
@@ -498,21 +520,31 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 		free(mat_a);
 	}
 
-	printf("n_seg: %d and nan_count: %d\n", n_seg, nan_count);
+	printf("n_seg: %d; nan_count: %d; discarded seg: %d\n",
+		n_seg, nan_count, discard);
 	printf("There are %d decays of at least -25 dB.\n", l);
+	fprintf(fh, "n_seg: %d; nan_count: %d; discarded seg: %d\n",
+		n_seg, nan_count, discard);
+	fprintf(fh, "There are %d decays of at least -25 dB.\n", l);
 
 	/* Get mean RT and standard dev of RT if num of valid RTs > 1 */
-	if (n_seg - nan_count > 1) {
-		*mean_rt /= (n_seg - nan_count);
+	if (n_seg - nan_count - discard > 1) {
+		*mean_rt /= (n_seg - nan_count - discard);
 
-		for (sd_tmp = 0.0, i = 0; i < n_seg - nan_count; i++)
+		for (sd_tmp = 0.0, i = 0; i < n_seg - nan_count - discard; i++)
 			sd_tmp += pow(fabs(sd_rev_time[i] - *mean_rt), 2);
 
-		*rt_sd = sqrt(sd_tmp / (n_seg - nan_count - 1));
+		*rt_sd = sqrt(sd_tmp / (n_seg - nan_count - discard - 1));
 
 		/* Get standard error from std dist (97.5 percentile) */
-		*rt_sd = (*rt_sd / sqrt(n_seg - nan_count)) * 1.96;
+		*rt_sd = (*rt_sd / sqrt(n_seg - nan_count - discard)) * 1.96;
 	}
+
+	
+	printf("Mean RT for %d band: %lf\n", band, *mean_rt);
+	printf("RT Standard Dev for %d band: %lf\n", band, *rt_sd);
+	fprintf(fh, "Mean RT for %d band: %lf\n", band, *mean_rt);
+	fprintf(fh, "RT Standard Dev for %d band: %lf\n\n", band, *rt_sd);
 
 	/* Free stuff */
 	for (i = 0; i < array_size; i++)
@@ -1250,7 +1282,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, double *a_par,
 	nlopt_opt nl_obj1 = nlopt_create(NLOPT_LN_COBYLA, 1);
 	nlopt_set_lower_bounds1(nl_obj1, lb[0]);
 	nlopt_set_upper_bounds1(nl_obj1, ub[0]);
-	nlopt_set_maxeval(nl_obj1, 50);
+	nlopt_set_maxeval(nl_obj1, 100);
 	nlopt_set_min_objective(nl_obj1, (nlopt_func) alpha_opt, (void *) &nld);
 
 
@@ -1311,6 +1343,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, double *a_par,
 	/* No longer need nl_obj1; coarse search is done */
 	nlopt_destroy(nl_obj1);
 
+#ifdef COARSE_DR_EST
 	dr = get_decay_region(6 * samp_freq, coarse_grid[gmax_pos[0]],
 		coarse_grid[gmax_pos[1]], alpha[gmax_pos[0]][gmax_pos[1]], len);
 
@@ -1318,6 +1351,7 @@ int ml_fit(float *data_seg, int len, float samp_freq, double *a_par,
 		free(coarse_grid);
 		return -1;
 	}
+#endif
 
 	/* Create new nlopt object for fine search */
 	nlopt_opt nl_obj3 = nlopt_create(NLOPT_LN_COBYLA, 3);
