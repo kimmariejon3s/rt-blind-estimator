@@ -19,10 +19,11 @@
 #include <libswresample/swresample.h>
 #include <libavutil/channel_layout.h>
 #include <libavcodec/avcodec.h>
-#include <liquid/liquid.h>
+#include <liquid.h>
 #include <nlopt.h>
 #include <svdlib.h>
 #include "butter_params.h"
+#include <libavutil/opt.h>
 
 #define	MAX_PATH_SZ	150
 #define SPLIT		20		/* Process wav in SPLIT segment(s) */
@@ -703,7 +704,7 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 		resamp_frames);
 
 	/* Free memory no longer needed */
-	free(resampled_wav);
+	av_free((uint8_t **) &resampled_wav[0]);
 	resampled_wav = NULL;
 
 	/* Obtain signal envelope */
@@ -788,7 +789,8 @@ float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, in
 
 	if (resamp_frames < 0) {
 		printf("Resampling failure\nExiting...\n");
-		av_freep(&output_data);
+		av_free(&output_data[0]);
+		output_data = NULL;
 		return NULL;
 	}
 
@@ -847,7 +849,7 @@ float * oct_filt_data(float *resamp_data, int band_num, float samp_freq, int res
 		iirfilt_rrrf_destroy(f_obj_oct2);
 	}
 
-	/* fiiltered data: return to previous function */
+	/* filtered data: return to previous function */
 	return filtered;
 }
 
