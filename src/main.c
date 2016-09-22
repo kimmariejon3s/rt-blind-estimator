@@ -24,8 +24,9 @@
 #include <svdlib.h>
 #include "butter_params.h"
 #include <libavutil/opt.h>
+#include <windows.h>
 
-#define	MAX_PATH_SZ	150
+#define	MAX_PATH_SZ	512 
 #define SPLIT		20		/* Process wav in SPLIT segment(s) */
 #define MAX_CHUNK_SIZE	1024 * 1024 * 1024
 #define WINDOW_WIDTH	0.5
@@ -55,7 +56,6 @@
 #define DISCARD_THRESH	0		/* Discard decay segs if <= this */
 
 /* Functions */
-void usage_func(void);
 int get_wav_data(char *filename);
 int compute_rt(int samp, int array_size, int *store_start, int *store_end, 
 	double *dr, double *a, double *b, double *alpha, double *mean_rt,
@@ -112,40 +112,56 @@ const char fname[] = "./blind_rts.log";
 	float butt_a[3 * (L_ENV + R_ENV)] = {0};
 #endif
 
-int main(int argc, char *argv[])
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine,
+		int nCmdShow) 
 {
 	double ret;
-	char filename[MAX_PATH_SZ];
+	char filename[MAX_PATH_SZ] = "";
+	char tmp_str[MAX_PATH_SZ]; 
 
-	if (argc != 2) {
-		usage_func();
+	OPENFILENAME ofn;
+	ZeroMemory(&ofn, sizeof(ofn));
+	ofn.lStructSize = sizeof(ofn);
+	ofn.hwndOwner = NULL;
+	ofn.lpstrFilter = "WAV Files (*.wav)\0*.wav\0";
+	ofn.lpstrFile = filename;
+	ofn.nMaxFile = MAX_PATH_SZ;
+	ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST;
+	ofn.lpstrDefExt = "wav";
+
+	snprintf(tmp_str, MAX_PATH_SZ, "Welcome to the Blind Reverberation Time Estimation "
+		"Program!\n\nOutput for this program will be printed in a console window.\n"
+		"\nData will also be logged to the file %s (in the same directory as the "
+		"application).\n", fname);
+
+	MessageBox(NULL, tmp_str, 
+		"Blind Reverberation Time Estimation", MB_OK);
+	MessageBox(NULL, "Please select a mono, 16-bit signed wav file", 
+		"Blind Reverberation Time Estimation", MB_OK);
+
+	if (GetOpenFileName(&ofn)) {
+		ret = get_wav_data(filename);
+	} else { 
+		MessageBox(NULL, "Error Selecting File! Exiting...",
+			"Blind Reverberation Time Estimation", MB_OK | MB_ICONEXCLAMATION);
 		return 0;
 	}
-
-	if (snprintf(filename, MAX_PATH_SZ, "%s", argv[1]) >=  MAX_PATH_SZ) {
-		printf("File path too long, please shorten the path / filename\n"
-			"Filename was truncated: %s\n", filename);
-		return 0;
-	}
-
-	ret = get_wav_data(filename);
 
 	if (ret < 0) {
-		printf("Error returned during calculations...\n");
+		MessageBox(NULL, "Error returned during calculations...\nCheck console for"
+			" more information.\nConsole will"
+			" close when OK is pressed.",
+			"Blind Reverberation Time Estimation", MB_OK | MB_ICONEXCLAMATION);
 		return -1;
 	} else {
-		printf("Results exported to log file: %s\n", fname);
-		printf("Exiting gracefully...\n");
+		snprintf(tmp_str, MAX_PATH_SZ, "Results exported to log file: %s\n"
+			"Console will close when OK is pressed.", fname);
+		MessageBox(NULL, tmp_str, 
+			"Blind Reverberation Time Estimation", MB_OK); 
         }
 	return 0;
 }
 
-
-void usage_func(void) {
-	printf("Usage:\n"
-		"./blind_rt_est <path to wav>\n\n"
-		"Wav file must be 16 bit signed and in mono channel format\n");
-}
 
 int get_wav_data(char *filename) {
 	SF_INFO input_info;
@@ -160,7 +176,7 @@ int get_wav_data(char *filename) {
 
 	if (fh == NULL) {
 		printf("Error opening log file!\n");
-		return 0;
+		return -1;
 	}
 
 	/* Open file */
@@ -168,11 +184,10 @@ int get_wav_data(char *filename) {
 	SNDFILE *input = sf_open(filename, SFM_READ, &input_info);
 
 	if (input == NULL) {
-		printf("Error opening Wav file!\n");
-		usage_func();
-		return 0;
-	} else
-		printf("Reading %s\n", filename);
+		MessageBox(NULL, "Error opening Wav file!",
+			"Blind Reverberation Time Estimation", MB_ICONEXCLAMATION | MB_OK);
+		return -1;
+	}
 
 	/* Print header data */
 	printf("Frames: %llu\nSample Rate: %d\nChannels: %d\nFormat: 0x%X\n"
@@ -184,16 +199,20 @@ int get_wav_data(char *filename) {
 		mono channel and 16 bit signed wav */
 	if ((input_info.format & 0xFF000F) != 0x10002 &&
 			(input_info.format & 0xFF000F) != 0x130002) {
-		printf("Program requires 16-bit signed wav.\nMake sure format "
-			"is 0x10002 or 0x130002.\nExiting...\n");
+		MessageBox(NULL, "Program requires 16-bit signed wav.\nMake sure format "
+			"is 0x10002 or 0x130002.\nExiting...\n", 
+			"Blind Reverberation Time Estimation", MB_ICONEXCLAMATION | MB_OK);
 		sf_close(input);
-		return 0;
+		return -1;
 	}
 	if (input_info.channels != 1) {
-		printf("Input must be a single channel wav file. Exiting...\n");
+		MessageBox(NULL, "Input must be a single channel wav file. Exiting...\n",
+			"Blind Reverberation Time Estimation", MB_ICONEXCLAMATION | MB_OK);
 		sf_close(input);
-		return 0;
+		return -1;
 	}
+	
+	printf("Reading %s\n", filename);
 
 	fprintf(fh, "=====================================================\n");
 	fprintf(fh, "Reverberation Time calculations: %s\n", filename);

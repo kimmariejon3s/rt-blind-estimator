@@ -1,0 +1,5 @@
+In order to build liquid-dsp on Windows, after running ./configure, open the Makefile
+and change the LDFLAGS to use the Windows version of libc:
+
+-LDFLAGS		+=  -lm -lc 
++LDFLAGS		+=  -lm -lmsvcrt

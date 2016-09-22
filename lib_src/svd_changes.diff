@@ -1,0 +1,42 @@
+diff -r svdlibc/main.c ../../../Desktop/svd/svdlibc-master/main.c
+38d37
+< #include <sys/resource.h>
+43,61d41
+< /***********************************************************************
+<  *                                                                     *
+<  *                        timer()                                      *
+<  *            Returns elapsed cpu time (float, in seconds)             *
+<  *                                                                     *
+<  ***********************************************************************/
+< float timer(void) {
+<   long elapsed_time;
+<   struct rusage mytime;
+<   getrusage(RUSAGE_SELF,&mytime);
+<  
+<   /* convert elapsed time to milliseconds */
+<   elapsed_time = (mytime.ru_utime.tv_sec * 1000 +
+<                   mytime.ru_utime.tv_usec / 1000);
+<   
+<   /* return elapsed time in seconds */
+<   return((float)elapsed_time/1000.);
+< }
+< 
+226c206
+<   exetime = timer();
+---
+>   exetime = 0;
+236c216
+<   exetime = timer() - exetime;
+---
+>   exetime = 0 - exetime;
+diff -r svdlibc/Makefile ../../../Desktop/svd/svdlibc-master/Makefile
+4c4
+< LIBS   = -lm
+---
+> LIBS   = -lm -lws2_32
+diff -r svdlibc/svdlib.h ../../../Desktop/svd/svdlibc-master/svdlib.h
+40a41
+> #include <winsock2.h>
+diff -r svdlibc/svdutil.c ../../../Desktop/svd/svdlibc-master/svdutil.c
+40d39
+< #include <netinet/in.h>

@@ -1,3 +1,6 @@
+README: WINDOWS VERSION 
+=======================
+
 INTRODUCTION
 This program allows the reverberation time of a venue to be determined
 blindly, using a sample of music or speech that is recorded in the venue
@@ -8,7 +11,13 @@ non-diffuse rooms." Acta Acustica united with Acustica 93.5 (2007): 760-770.
 
 C implementation by Kim Jones <K.Jones20@edu.salford.ac.uk>
 
-The original source code for this project can be found in the src/ directory.
+The source code can be found here:
+https://github.com/kimmariejon3s/rt-blind-estimator/tree/windows_master
+PLEASE NOTE: The Windows version is on the "windows_master" branch; the master
+branch tracks the Linux version. 
+
+The original source code for this project can be found in the rt-blind-estimator/src
+directory.
 
 
 PREREQUISITES
@@ -18,11 +27,17 @@ The audio file should be a wav file and should be in mono signed 16-bit format
 
 RUNNING THE PROGRAM
 This program has been tested on x86_64 platform running the Ubuntu-based
-Linux Mint 17.1. This will be extended to Windows platforms in the future.
+Linux Mint 17.1 and on Windows 7 (64-bit).
 
-You can then run the program from the same directory and this README by executing:
-./blind_rt_est <Path to wav file>
+This version of the code is for Windows only! If you are looking for the Linux binary,
+please checkout the "master" branch of the git repo. 
 
+You can then run the program from the same directory as this README by launching the
+blind-rt-est.exe executable (by clicking on it, or using the cmd window):
+
+PLEASE NOTE: You MUST keep the executable where it is in the folder. It depends on external
+libraries that are provided with the executable and it will not run if it cannot find the
+libraries. 
 
 EXTERNAL LIBRARIES & LICENSING INFORMATION
 This software is licensed under the MIT Licence. In addition, the program uses
@@ -38,23 +53,29 @@ This software uses code of libsndfile (http://www.mega-nerd.com/libsndfile/)
 licensed under the LGPL (>=v2.1) and its source is located in the
 lib_src/ directory.
 
-This software uses code of SVDLIBC (https://tedlab.mit.edu/~dr/SVDLIBC/)
+This software uses code from a fork of SVDLIBC (https://github.com/lucasmaystre/svdlibc)
 licensed under the BSD Licence and its source is located in the
 lib_src/ directory.
 
-This software uses code of liquid-dsp (http://liquidsdr.org/) licensed under the
-MIT Licence and its source is located in the lib_src/ directory.
+This software uses code of liquid-dsp (https://github.com/jgaeddert/liquid-dsp)
+licensed under the MIT Licence and its source is located in the lib_src/ directory. 
 
-The source code for the external libraries was unmodified. The dynamic libraries
-built using these versions of the source code can be found in the libs/ directory.
+The source code for SVDLIBC and liquid-dsp required slight modification to run on Windows.
+The files svd_changes.diff and liquid_changes.diff in the lib_src directory illustrate
+the changes that need to be made to the unmodified source code once it has been extracted
+from the tarball. Of course, that is only if you want to build the libraries from source;
+the binaries provided should be sufficient for most Windows users.
 
+The source code for the other external libraries was unmodified. The dynamic libraries
+built using these versions of the source code can be found in the same directory as the
+executable.
 
 MISC INFORMATION
 Since the binary is provided, there is no need for the user to comile this
 code by themselves. However, in case the user is curious, this was the GCC
 compile command used:
 
-gcc -o blind_rt_est src/main.c -I./src -I/usr/include -L./libs -lsndfile -L/usr/local/lib -lswresample -lavutil -lliquid -lnlopt -lm -I./lib_src/SVDLIBC/ -lsvd -Wl,-rpath,./libs,--enable-new-dtags
+gcc -o blind-rt-est src/main.c -I./src -I/c/Users/Kim/Documents/ffmpeg-3.1.3.tar/ffmpeg-3.1.3/ffmpeg-3.1.3 -I/c/Users/Kim/Documents/nlopt-2.4.2-dll64 -I/c/Users/Kim/Documents/libsndfile-1.0.27/src -I/c/Users/Kim/Desktop/liquid-dsp-master/include -I/c/Users/Kim/Desktop/svd/svdlibc-master -L./ libsndfile-1.dll swresample-2.dll avutil-55.dll avcodec-57.dll libliquid.so libnlopt-0.dll -lm libsvd.a -lws2_32 -lcomdlg32 -lgdi32
 
 Obviously, the locations of header files, etc, were dependent on the locations
 on my system. However, if you install all of the tarballs in the lib_src
