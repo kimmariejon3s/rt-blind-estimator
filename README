@@ -37,7 +37,7 @@ blind-rt-est.exe executable (by clicking on it, or using the cmd window):
 
 PLEASE NOTE: You MUST keep the executable where it is in the folder. It depends on external
 libraries that are provided with the executable and it will not run if it cannot find the
-libraries. 
+libraries. You can create a shortcut of the .exe and place it whereever you like.  
 
 EXTERNAL LIBRARIES & LICENSING INFORMATION
 This software is licensed under the MIT Licence. In addition, the program uses

@@ -99,6 +99,7 @@ struct nl_extra_data {
 
 
 /* Globals */
+int seg_len_val = SEG_LEN;
 int num_bands = 8;
 int octave_bands[] = {63, 125, 250, 500, 1000, 2000, 4000, 8000};
 int samp_freq_per_band[] = {3000, 3000, 3000, 3000, 3000, 6000, 12000, 24000};
@@ -118,6 +119,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	double ret;
 	char filename[MAX_PATH_SZ] = "";
 	char tmp_str[MAX_PATH_SZ]; 
+	int win_ret;
+	char win_read[2];
 
 	OPENFILENAME ofn;
 	ZeroMemory(&ofn, sizeof(ofn));
@@ -132,14 +135,50 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	snprintf(tmp_str, MAX_PATH_SZ, "Welcome to the Blind Reverberation Time Estimation "
 		"Program!\n\nOutput for this program will be printed in a console window.\n"
 		"\nData will also be logged to the file %s (in the same directory as the "
-		"application).\n", fname);
+		"application).\n\nClick OK to continue...", fname);
 
 	MessageBox(NULL, tmp_str, 
-		"Blind Reverberation Time Estimation", MB_OK);
-	MessageBox(NULL, "Please select a mono, 16-bit signed wav file", 
-		"Blind Reverberation Time Estimation", MB_OK);
+		"Blind Reverberation Time Estimation", MB_OK | MB_ICONASTERISK);
+	MessageBox(NULL, "Please select a mono, 16-bit signed wav file when prompted.\n"
+		"A file dialog box will open after you click OK...", 
+		"Blind Reverberation Time Estimation", MB_OK | MB_ICONASTERISK);
 
 	if (GetOpenFileName(&ofn)) {
+		win_ret = MessageBox(NULL,
+			"After the decay regions have been identified, the wav "
+			"file will be analysed in segments.\n\nIdeally each segment should "
+			"have 36 decays of at least -25 dB.\n\nThe default segment length "
+			"is 3 minutes.\n\nDo you want to change the default segment "
+			"length?\n\nIf you select \"No\", the default value will be used."
+			"\n\nIf you are unsure what segment length to use, select \"No\" "
+			"to keep the default value.\n\n"
+			"If you select \"Yes\", you will be prompted to enter the desired "
+			"segment length (in minutes) in the console window. Please press "
+			"the enter key once you have typed the integer.",
+			"Blind Reverberation Time Estimation", MB_YESNO | MB_ICONASTERISK);
+
+		if (win_ret == IDYES) {
+			printf("Please enter a value for segment length (in minutes).\n"
+				"Input should be an integer between 1 and 9:\n");
+			fgets(win_read, 2, stdin);
+			if ((int) win_read[0] - (int) '0' > 0 &&
+					(int) win_read[0] - (int) '0' < 10) {
+				seg_len_val = (int) win_read[0] - (int) '0';
+
+				snprintf(tmp_str, MAX_PATH_SZ, "Segment length is now "	
+					"%d minute(s)!\nClick OK to continue...",
+					seg_len_val);
+
+				MessageBox(NULL, tmp_str,
+					"Blind Reverberation Time Estimation", MB_OK | 
+					MB_ICONASTERISK);	
+			} else {
+				 MessageBox(NULL, "Error! Invalid input for segment "
+					"length!\n\nDefault of 3 minutes will be used...",
+					"Blind Reverberation Time Estimation", MB_OK |
+					MB_ICONEXCLAMATION);	
+			}
+		}
 		ret = get_wav_data(filename);
 	} else { 
 		MessageBox(NULL, "Error Selecting File! Exiting...",
@@ -150,14 +189,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	if (ret < 0) {
 		MessageBox(NULL, "Error returned during calculations...\nCheck console for"
 			" more information.\nConsole will"
-			" close when OK is pressed.",
+			" close after you click OK.",
 			"Blind Reverberation Time Estimation", MB_OK | MB_ICONEXCLAMATION);
 		return -1;
 	} else {
 		snprintf(tmp_str, MAX_PATH_SZ, "Results exported to log file: %s\n"
-			"Console will close when OK is pressed.", fname);
+			"Console will close after you click OK.", fname);
 		MessageBox(NULL, tmp_str, 
-			"Blind Reverberation Time Estimation", MB_OK); 
+			"Blind Reverberation Time Estimation", MB_OK | MB_ICONASTERISK); 
         }
 	return 0;
 }
@@ -375,10 +414,10 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 
 	/* seg_len_n is the number of samples in the length of time
 	 *	chosen, seg_len. n_seg is the number of chunks, For
-	 *	example, if seg_len = 180 secs and file_len = 6200
+	 *	example, if seg_len_val = 180 secs and file_len = 6200
 	 *	samples, then n_seg = 3 chunks (2 chunks of 180 secs and
 	 *	1 shorter chunk). */
-	seg_len_n = SEG_LEN * samp;
+	seg_len_n = seg_len_val * samp;
 	n_seg = ceil((double)file_len / seg_len_n);
 
 	/* Create array to store standard deviation values */
