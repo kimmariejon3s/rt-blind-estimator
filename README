@@ -41,7 +41,20 @@ libraries. You can create a shortcut of the .exe and place it whereever you like
 
 EXTERNAL LIBRARIES & LICENSING INFORMATION
 This software is licensed under the MIT Licence. In addition, the program uses
-the following external libraries:
+the following external libraries, each licensed under their own licence:
+
+The GCC libraries libgcc, libgomp and lipwinpthreads are part of the GCC
+package and modified for use on Windows by Msys2. GCC is licensed under
+GPLv3.0. In accordance with the terms of the GCC Runtime Library Exception
+Clause, I have included the DLLs for these libraries with the understanding
+that my application can remain licensed under the MIT Licence. 
+In order to meet the requirements of Ssection 6 of the GPL, I will provide
+access to the source code for these DLLs for three years after the release 
+of this package (30/09/16). Contact me at kimmariejones at ymail dot com to
+request this. You should only need to contact me if the links have expired, as
+these are the locations where the source code exists at the time of release: 
+MSYS2 patches for Windows: https://sourceforge.net/projects/msys2/files/REPOS/MINGW/Sources/
+GCC 6.1.0 mirrors: https://gcc.gnu.org/mirrors.html 
 
 This software uses code of FFmpeg (http://ffmpeg.org) licensed under the
 LGPLv2.1 and its source is located in the lib_src/ directory.

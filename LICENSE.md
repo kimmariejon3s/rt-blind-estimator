@@ -26,3 +26,7 @@ NLopt under LGPL >= v2.1.
 libsndfile under LGPL >= v2.1.
 SVDLIBC under BSD license.
 liquid-dsp under MIT License.
+libgomp, libgcc and libwinpthreads under GPL 3.0 and under the GCC Runtime
+Library Exception Clause.
+
+Please see the README for more details.
