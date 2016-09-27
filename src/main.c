@@ -23,6 +23,7 @@
 #include <nlopt.h>
 #include <svdlib.h>
 #include "butter_params.h"
+#include <omp.h>
 
 #define	MAX_PATH_SZ	150
 #define SPLIT		20		/* Process wav in SPLIT segment(s) */
@@ -98,6 +99,7 @@ struct nl_extra_data {
 
 
 /* Globals */
+int seg_len_val = SEG_LEN;
 int num_bands = 8;
 int octave_bands[] = {63, 125, 250, 500, 1000, 2000, 4000, 8000};
 int samp_freq_per_band[] = {3000, 3000, 3000, 3000, 3000, 6000, 12000, 24000};
@@ -116,10 +118,20 @@ int main(int argc, char *argv[])
 	double ret;
 	char filename[MAX_PATH_SZ];
 
-	if (argc != 2) {
+	if (argc < 2 || argc > 3) {
 		usage_func();
 		return 0;
 	}
+
+	/* Read optional seg_len_val amendment */
+	if (argc == 3) {
+		if (atoi(argv[2]) > 0 && atoi(argv[2]) < 10) {
+			seg_len_val = atoi(argv[2]);			
+			printf("Changing segment length to %d minutes\n",
+				seg_len_val);
+		}
+			
+	} 
 
 	if (snprintf(filename, MAX_PATH_SZ, "%s", argv[1]) >=  MAX_PATH_SZ) {
 		printf("File path too long, please shorten the path / filename\n"
@@ -142,8 +154,14 @@ int main(int argc, char *argv[])
 
 void usage_func(void) {
 	printf("Usage:\n"
-		"./blind_rt_est <path to wav>\n\n"
-		"Wav file must be 16 bit signed and in mono channel format\n");
+		"./blind_rt_est <path to wav> [segment length]\n\n"
+		"Wav file must be 16 bit signed and in mono channel format.\n\n"
+		"Segment length is an optional command line parameter to\n"
+		"change the segment length from the default value (3 mins).\n"
+		"The audio is divided into segments for obtaining the RT;\n"
+		"there should be 36 decays of at least -25 dB in each "
+		"segment.\nIf you are unsure, just ignore this parameter and "
+		"use the default value.\n");
 }
 
 int get_wav_data(char *filename) {
@@ -326,7 +344,7 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 	int n_seg, file_len, pos_to, pos_from, seg_len_n, i, j, k, l_reg, ret_sz;
 	int min_5dB_index, min_rtdB_index, nan_count = 0;
 	int n_chan = 4 * samp, l = 0, discard = 0;
-	double **chan, chan_opt[n_chan], chan_opt_log[n_chan], sd_tmp;
+	double **chan, *chan_opt, *chan_opt_log, sd_tmp;
 	double *sd_rev_time, max, min_5dB, min_rtdB, **mat_a, mat_a_mul[2];
 
 	/* SVDLIBC stuff */
@@ -341,6 +359,8 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 	printf("Computing the Reverberation Time...\n");
 
 	chan = calloc(array_size, sizeof(double *));
+	chan_opt = calloc(n_chan, sizeof(double));
+	chan_opt_log = calloc(n_chan, sizeof(double));
 
 	for (i = 0; i < array_size; i++)
 		chan[i] = calloc(n_chan, sizeof(double));
@@ -355,10 +375,10 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 
 	/* seg_len_n is the number of samples in the length of time
 	 *	chosen, seg_len. n_seg is the number of chunks, For
-	 *	example, if seg_len = 180 secs and file_len = 6200
+	 *	example, if seg_len_val = 180 secs and file_len = 6200
 	 *	samples, then n_seg = 3 chunks (2 chunks of 180 secs and
 	 *	1 shorter chunk). */
-	seg_len_n = SEG_LEN * samp;
+	seg_len_n = seg_len_val * samp;
 	n_seg = ceil((double)file_len / seg_len_n);
 
 	/* Create array to store standard deviation values */
@@ -551,6 +571,8 @@ int compute_rt(int samp, int array_size, int *store_start, int *store_end,
 		free(chan[i]);
 
 	free(chan);
+	free(chan_opt);
+	free(chan_opt_log);
 	free(sd_rev_time);
 	svdFreeSVDRec(svd_mat);
 
@@ -590,8 +612,10 @@ int optimum_model_2(double **chan, int n, int chan_sz, int samp, double *lin) {
 	int i, j, k, n1, min_index, l_reg; 
 	int n0 = floor((1.0 - over) * nn);
 	int n_sect = floor(((double)n - nn) / n0);
-	double n2, min, chan_sum[chan_sz], last[n]; 
+	double n2, min, chan_sum[chan_sz], *last; 
 	double win[nn * n_sect];
+
+	last = calloc(n, sizeof(double));
 
 	for (i = 0, n1 = 0; i < n_sect; i++) {
 		n2 = n1 + nn;
@@ -643,6 +667,7 @@ int optimum_model_2(double **chan, int n, int chan_sz, int samp, double *lin) {
 	}
 	//DEBUG note: lin[0-9] matches MATLAB
 
+	free(last);
 	return (int) n2;
 }
 
@@ -703,7 +728,7 @@ int process_wav_data(int band, float *wav_data, SF_INFO input_info,
 		resamp_frames);
 
 	/* Free memory no longer needed */
-	free(resampled_wav);
+	av_free((uint8_t **) &resampled_wav[0]);
 	resampled_wav = NULL;
 
 	/* Obtain signal envelope */
@@ -788,7 +813,7 @@ float * resamp_wav_data(SwrContext *resamp, int in_rate, uint64_t num_frames, in
 
 	if (resamp_frames < 0) {
 		printf("Resampling failure\nExiting...\n");
-		av_freep(&output_data);
+		av_free(&output_data[0]);
 		return NULL;
 	}
 
@@ -1094,8 +1119,7 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 		int resamp_frames, int samp_freq, double **p_alpha, 
 		double **p_a_par, double **p_b_par, double **p_dr,
 		int **p_start, int **p_end) {
-	int sz, i, j, k, len, min_abs_filt_seg, max_abs_filt_seg, cnt, ret = 0;
-	float *segment, *env_seg, *abs_filt_seg, *seg_seg2, max_seg2;
+	int sz, i, all_ret = 0;
 	float *abs_filtered = calloc(resamp_frames, sizeof(float));
 	int *store_start = calloc(s_e_size, sizeof(int)); 
 	int *store_end = calloc(s_e_size, sizeof(int));
@@ -1114,14 +1138,17 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 
 	/* Largest possible size of arrays - first pair of elements */
 	sz = start_end[1][0] - start_end[0][0];
-	segment = calloc(sz, sizeof(float));
-	env_seg = calloc(sz, sizeof(float));
-	abs_filt_seg = calloc(sz, sizeof(float));
-	seg_seg2 = calloc(sz + sz - roundf((DAMP_SEG_SIZE / 2) * samp_freq), 
-		sizeof(float));
 
-	for (i = 0, cnt = 0; i < s_e_size; i++) {
-		len = abs(start_end[1][i] - start_end[0][i]);
+	#pragma omp parallel for schedule(static)
+	for (i = 0; i < s_e_size; i++) {
+		float *segment = calloc(sz, sizeof(float));
+		float *env_seg = calloc(sz, sizeof(float));
+		float *abs_filt_seg = calloc(sz, sizeof(float));
+		float *seg_seg2 = calloc(sz + sz - roundf((DAMP_SEG_SIZE / 2) *
+			samp_freq), sizeof(float));
+		float max_seg2;
+		int k, j, len = abs(start_end[1][i] - start_end[0][i]);
+		int min_abs_filt_seg, max_abs_filt_seg, ret = 0;
 
 		/* Store decay segment in new array */
 		for (k = 0, j = start_end[0][i]; j < start_end[1][i]; j++, k++)
@@ -1169,42 +1196,32 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
 
 		/* Save fine-tuned start and end locations */
 		// FIXME: are the -1's OK here? Compare to MATLAB
-		store_start[cnt] = start_end[0][i] + max_abs_filt_seg;
-		store_end[cnt] = start_end[0][i] + max_abs_filt_seg +
+		store_start[i] = start_end[0][i] + max_abs_filt_seg;
+		store_end[i] = start_end[0][i] + max_abs_filt_seg +
 				len_store[i] - 1;
 
 		/* ML fitting of decay model to the data */
 		ret = ml_fit(seg_seg2, len_store[i], (float) samp_freq, 
-			&a_par[cnt], &b_par[cnt], &alpha[cnt]);
+			&a_par[i], &b_par[i], &alpha[i]);
 
-		/* Reset to zero b/c arrays are longer than they need to be */
-		memset(segment, 0, sz * sizeof(float));
-		memset(seg_seg2, 0, (sz + sz - roundf((DAMP_SEG_SIZE / 2) * 
-			samp_freq)) * sizeof(float));
-		memset(env_seg, 0, sz * sizeof(float));
-		memset(abs_filt_seg, 0, sz * sizeof(float));
+		free(segment);
+		free(seg_seg2);
+		free(env_seg);
+		free(abs_filt_seg);
 
 		if (ret == -1) {
 			/* DR being discarded */
+			dr[i] = 0;
 			continue;
 		} else if (ret < -1) {
 			/* Error */
-			printf("Error during ML calculations!\n");
-			free(segment);
-			free(seg_seg2);
-			free(env_seg);
-			free(abs_filt_seg);
-			free(abs_filtered);
-			free(len_store);
-
-			return -1;
+			all_ret = -1;
 		}
 
 		/* If code gets to here, DR was possibly valid */
 		/* Compute decay curves using ML-calculated params */
-		dr[cnt] = get_decay_region(6 * samp_freq, a_par[cnt], b_par[cnt],
-			alpha[cnt], len_store[i]);
-		cnt++;
+		dr[i] = get_decay_region(6 * samp_freq, a_par[i], b_par[i],
+			alpha[i], len_store[i]);
 	}
 
 	/* Pointers used by caller cannot be freed. They are alpha[], a[],
@@ -1217,17 +1234,14 @@ int perform_ml(int **start_end, float *env, int s_e_size, float *filtered_wav,
         *p_end = store_end;
 
 	/* Free pointers that are no longer needed */
-	free(segment);
-	free(seg_seg2);
-	free(env_seg);
-	free(abs_filt_seg);
 	free(abs_filtered);
 	free(len_store);
 
-	if (ret < 0 && ret != -1)
+	if (all_ret != 0) {
+		printf("Error during ML calculations!\n");
 		return -1;
-	else
-		return cnt;
+	} else
+		return s_e_size;
 }
 
 double get_decay_region(int c_len, double a, double b, double alpha,
@@ -1322,7 +1336,11 @@ int ml_fit(float *data_seg, int len, float samp_freq, double *a_par,
 			}
 
 			like[k][i] *= -1;
+		}
+	}
 
+	for (i = 0; i < SQP_STEP; i++) {
+		for (k = 0; k < SQP_STEP; k++) {
 			/* Store value and position ([][]) of global max */
 			if (i == 0 && k == 0) {
 				gmax_val = like[k][i];

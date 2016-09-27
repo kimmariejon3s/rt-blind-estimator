@@ -18,11 +18,16 @@ The audio file should be a wav file and should be in mono signed 16-bit format
 
 RUNNING THE PROGRAM
 This program has been tested on x86_64 platform running the Ubuntu-based
-Linux Mint 17.1. This will be extended to Windows platforms in the future.
+Linux Mint 17.1. There is also a Windows version. This can be found on the
+"windows_master" branch in the Github repository.
 
-You can then run the program from the same directory and this README by executing:
-./blind_rt_est <Path to wav file>
+You can then run the program from the same directory as this README by executing:
+./blind_rt_est <Path to wav file> [segment length]
 
+The segment length is an optional command line parameter, expressed in minutes.
+Each segment of the audio should contain 36 decays of at least -25 dB in order
+to obtain accurate reverberation time estimates. The default is 3 minutes. If
+you are unsure, ignore this parameter and keep the default value.
 
 EXTERNAL LIBRARIES & LICENSING INFORMATION
 This software is licensed under the MIT Licence. In addition, the program uses
@@ -54,7 +59,7 @@ Since the binary is provided, there is no need for the user to comile this
 code by themselves. However, in case the user is curious, this was the GCC
 compile command used:
 
-gcc -o blind_rt_est src/main.c -I./src -I/usr/include -L./libs -lsndfile -L/usr/local/lib -lswresample -lavutil -lliquid -lnlopt -lm -I./lib_src/SVDLIBC/ -lsvd -Wl,-rpath,./libs,--enable-new-dtags
+gcc -o blind_rt_est src/main.c -I./src -I/usr/include -L./libs -lsndfile -L/usr/local/lib -lswresample -lavutil -lliquid -lnlopt -lm -I./lib_src/SVDLIBC/ -lsvd -Wl,-rpath,./libs,--enable-new-dtags -fopenmp -floop-parallelize-all
 
 Obviously, the locations of header files, etc, were dependent on the locations
 on my system. However, if you install all of the tarballs in the lib_src
