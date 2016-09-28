@@ -88,7 +88,7 @@ Since the binary is provided, there is no need for the user to comile this
 code by themselves. However, in case the user is curious, this was the GCC
 compile command used:
 
-gcc -o blind-rt-est src/main.c -I./src -I/c/Users/Kim/Documents/ffmpeg-3.1.3.tar/ffmpeg-3.1.3/ffmpeg-3.1.3 -I/c/Users/Kim/Documents/nlopt-2.4.2-dll64 -I/c/Users/Kim/Documents/libsndfile-1.0.27/src -I/c/Users/Kim/Desktop/liquid-dsp-master/include -I/c/Users/Kim/Desktop/svd/svdlibc-master -L./ libsndfile-1.dll swresample-2.dll avutil-55.dll avcodec-57.dll libliquid.so libnlopt-0.dll -lm libsvd.a -lws2_32 -lcomdlg32 -lgdi32
+gcc -o blind-rt-estimation src/main.c -I./src -I/c/Users/Kim/Documents/ffmpeg-3.1.3.tar/ffmpeg-3.1.3/ffmpeg-3.1.3 -I/c/Users/Kim/Documents/nlopt-2.4.2-dll64 -I/c/Users/Kim/Documents/libsndfile-1.0.27/src -I/c/Users/Kim/Desktop/liquid-dsp-master/liquid-dsp-master/include -I/c/Users/Kim/Desktop/svdlibc-master/svdlibc-master -L./ libsndfile-1.dll swresample-2.dll avutil-55.dll avcodec-57.dll libliquid.so libnlopt-0.dll -lm libsvd.a -lws2_32  -lcomdlg32 -lgdi32 -floop-parallelize-all -fopenmp 
 
 Obviously, the locations of header files, etc, were dependent on the locations
 on my system. However, if you install all of the tarballs in the lib_src
